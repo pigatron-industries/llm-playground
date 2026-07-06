@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass(frozen=True)
@@ -73,3 +76,18 @@ def get_self_api_url() -> str:
     even when set after this module is first imported.
     """
     return os.getenv("SELF_API_URL", f"http://{get_host()}:{get_port()}/api")
+
+
+# --- Storage --------------------------------------------------------------
+
+
+def get_chats_dir() -> Path:
+    """Directory where chats are persisted as JSON files.
+
+    Override with the ``CHATS_DIR`` env var (relative paths resolve against the
+    working directory). Defaults to ``<project>/data/chats``.
+    """
+    raw = os.getenv("CHATS_DIR")
+    if raw:
+        return Path(raw).expanduser()
+    return PROJECT_ROOT / "data" / "chats"

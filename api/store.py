@@ -1,20 +1,23 @@
 """Chat storage.
 
-An in-memory store keyed by chat id. It's deliberately behind a small interface
-(:class:`ChatStore`) so it can be swapped for a database- or file-backed
-implementation later without touching the routes.
-
-Note: in-memory means chats are lost when the server restarts (including on
-auto-reload). That's fine for a local test harness; persist to disk/DB when you
-need durability.
+Chats are persisted as one JSON file per chat (``<chat_id>.json``) in a
+configurable directory (see :func:`api.config.get_chats_dir`). The store is
+behind a small interface so it can be swapped for a DB implementation later
+without touching the routes.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
+from .config import get_chats_dir
 from .schemas import Chat, ChatSummary, Message
+
+log = logging.getLogger("llm_harness.store")
 
 
 def _now() -> datetime:
@@ -25,34 +28,60 @@ _DEFAULT_TITLE = "New chat"
 
 
 class ChatStore:
-    def __init__(self) -> None:
-        self._chats: dict[str, Chat] = {}
+    """File-backed chat store."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+    # --- paths / io ---------------------------------------------------
+
+    def _path(self, chat_id: str) -> Path:
+        return self.directory / f"{chat_id}.json"
+
+    def _write(self, chat: Chat) -> None:
+        # Write to a temp file then atomically replace, so a crash mid-write
+        # can't leave a half-written (corrupt) chat file.
+        path = self._path(chat.id)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(chat.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def _read(self, path: Path) -> Chat | None:
+        try:
+            return Chat.model_validate_json(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — skip unreadable/corrupt files
+            log.warning("Skipping unreadable chat file: %s", path)
+            return None
+
+    # --- interface ----------------------------------------------------
 
     def create(self, title: str | None = None, model: str | None = None) -> Chat:
-        chat_id = uuid.uuid4().hex
         now = _now()
         chat = Chat(
-            id=chat_id,
+            id=uuid.uuid4().hex,
             title=title or _DEFAULT_TITLE,
             model=model,
             created_at=now,
             updated_at=now,
             messages=[],
         )
-        self._chats[chat_id] = chat
+        self._write(chat)
         return chat
 
     def get(self, chat_id: str) -> Chat | None:
-        return self._chats.get(chat_id)
+        path = self._path(chat_id)
+        return self._read(path) if path.is_file() else None
 
     def list(self) -> list[ChatSummary]:
-        ordered = sorted(
-            self._chats.values(), key=lambda c: c.updated_at, reverse=True
-        )
-        return [self._summarise(c) for c in ordered]
+        chats = [c for c in (self._read(p) for p in self.directory.glob("*.json")) if c]
+        chats.sort(key=lambda c: c.updated_at, reverse=True)
+        return [self._summarise(c) for c in chats]
 
     def add_message(self, chat_id: str, message: Message) -> Chat:
-        chat = self._chats[chat_id]
+        chat = self.get(chat_id)
+        if chat is None:
+            raise KeyError(chat_id)
         chat.messages.append(message)
         chat.updated_at = _now()
         # Give the chat a sensible title from the first user message.
@@ -60,13 +89,22 @@ class ChatStore:
             first_line = message.content.strip().splitlines()
             if first_line:
                 chat.title = first_line[0][:50]
+        self._write(chat)
         return chat
 
     def set_model(self, chat_id: str, model: str) -> None:
-        self._chats[chat_id].model = model
+        chat = self.get(chat_id)
+        if chat is None:
+            raise KeyError(chat_id)
+        chat.model = model
+        self._write(chat)
 
     def delete(self, chat_id: str) -> bool:
-        return self._chats.pop(chat_id, None) is not None
+        path = self._path(chat_id)
+        if path.is_file():
+            path.unlink()
+            return True
+        return False
 
     @staticmethod
     def _summarise(chat: Chat) -> ChatSummary:
@@ -80,8 +118,12 @@ class ChatStore:
         )
 
 
-_store = ChatStore()
+_store: ChatStore | None = None
 
 
 def get_store() -> ChatStore:
+    # Created lazily so CHATS_DIR set at startup is honoured.
+    global _store
+    if _store is None:
+        _store = ChatStore(get_chats_dir())
     return _store

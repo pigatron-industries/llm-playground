@@ -69,6 +69,7 @@ switch backends.
 | `LLM_API_KEY`   | preset value                   | Override the API key.                     |
 | `APP_HOST`      | `127.0.0.1`                    | Server bind host.                         |
 | `APP_PORT`      | `8080`                         | Server port.                              |
+| `CHATS_DIR`     | `<project>/data/chats`         | Directory for persisted chat JSON files.  |
 
 Examples:
 
@@ -103,9 +104,9 @@ Stored chats (server-side conversation store, see `api/store.py`):
   `Chat`. On a provider error the stored chat is left unchanged (safe to retry).
 
 The UI remembers the open chat id in browser storage, so refreshing reloads the
-whole conversation from the backend. Chats are held in memory — they reset when
-the server restarts; swap `ChatStore` for a DB/file implementation for
-durability.
+whole conversation from the backend. Chats are persisted as one JSON file per
+chat under `CHATS_DIR` (default `<project>/data/chats`), so they survive server
+restarts. Swap `ChatStore` in `api/store.py` for a DB implementation if needed.
 
 Interactive docs at http://127.0.0.1:8080/docs.
 ```

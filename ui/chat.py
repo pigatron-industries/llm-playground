@@ -28,6 +28,24 @@ def _error_detail(exc: Exception) -> str:
     return str(exc)
 
 
+def _message_bubble(name: str, is_user: bool):
+    """Render a message row: participant name on the left, bubble on the right.
+
+    Returns the (empty) bubble element so the caller can fill it with the
+    message text or a spinner.
+    """
+    with ui.row().classes("w-full items-start gap-3 no-wrap py-1"):
+        name_color = "text-indigo-500" if is_user else "text-gray-400"
+        ui.label(name).classes(
+            f"{name_color} text-xs font-medium w-20 shrink-0 text-right pt-2 "
+            "select-none"
+        )
+        bubble = ui.element("div").classes(
+            "bg-gray-100 rounded-2xl px-4 py-2 grow min-w-0"
+        )
+    return bubble
+
+
 def register_pages() -> None:
     @ui.page("/")
     async def chat_page() -> None:
@@ -111,7 +129,7 @@ def register_pages() -> None:
         # --- Center: chat history ----------------------------------------
         messages_area = ui.scroll_area().classes("w-full flex-grow min-h-0")
         with messages_area:
-            messages_col = ui.column().classes("w-full max-w-3xl mx-auto gap-2 p-4")
+            messages_col = ui.column().classes("w-full max-w-5xl mx-auto gap-2 p-4")
 
         def render_history() -> None:
             messages_col.clear()
@@ -121,11 +139,11 @@ def register_pages() -> None:
                         "text-gray-400 text-center w-full mt-8"
                     )
                 for msg in history:
-                    ui.chat_message(
-                        msg["content"],
-                        name="You" if msg["role"] == "user" else "Assistant",
-                        sent=msg["role"] == "user",
-                    )
+                    is_user = msg["role"] == "user"
+                    with _message_bubble("You" if is_user else "Assistant", is_user):
+                        ui.label(msg["content"]).classes(
+                            "text-gray-800 whitespace-pre-wrap break-words"
+                        )
 
         async def render_chat_list() -> None:
             try:
@@ -190,7 +208,7 @@ def register_pages() -> None:
 
         # --- Bottom: input -----------------------------------------------
         with ui.footer().classes("bg-white border-t p-2"):
-            with ui.row().classes("w-full max-w-3xl mx-auto items-end gap-2 no-wrap"):
+            with ui.row().classes("w-full max-w-5xl mx-auto items-end gap-2 no-wrap"):
                 text_input = (
                     ui.textarea(placeholder="Type a message…")
                     .classes("flex-grow")
@@ -215,8 +233,7 @@ def register_pages() -> None:
             history.append({"role": "user", "content": content})
             render_history()
             with messages_col:
-                thinking = ui.chat_message(name="Assistant", sent=False)
-                with thinking:
+                with _message_bubble("Assistant", is_user=False):
                     ui.spinner(size="sm")
             messages_area.scroll_to(percent=1.0)
             send_button.disable()

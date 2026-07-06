@@ -11,6 +11,9 @@ venv/
 # NiceGUI runtime storage (per-session state)
 .nicegui/
 
+# Persisted chat data (default CHATS_DIR)
+/data/
+
 # OS / editor
 .DS_Store
 .idea/
