@@ -141,9 +141,17 @@ def register_pages() -> None:
                 for msg in history:
                     is_user = msg["role"] == "user"
                     with _message_bubble("You" if is_user else "Assistant", is_user):
-                        ui.label(msg["content"]).classes(
-                            "text-gray-800 whitespace-pre-wrap break-words"
-                        )
+                        if is_user:
+                            # Keep user input verbatim (no markdown interpretation).
+                            ui.label(msg["content"]).classes(
+                                "text-gray-800 whitespace-pre-wrap break-words"
+                            )
+                        else:
+                            # Render assistant replies as markdown.
+                            ui.markdown(
+                                msg["content"],
+                                extras=["fenced-code-blocks", "tables"],
+                            ).classes("text-gray-800 break-words max-w-full")
 
         async def render_chat_list() -> None:
             try:
