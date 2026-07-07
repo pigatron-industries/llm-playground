@@ -6,6 +6,9 @@ through the API layer, keeping the two halves cleanly decoupled.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
+
 import httpx
 
 from api.config import get_self_api_url
@@ -59,12 +62,38 @@ async def delete_chat(chat_id: str) -> None:
         resp.raise_for_status()
 
 
-async def send_message(
-    chat_id: str, content: str, model: str, temperature: float = 0.7
+async def stream_message(
+    chat_id: str,
+    content: str,
+    model: str,
+    temperature: float,
+    on_delta: Callable[[str], None],
 ) -> dict:
-    """Send a message; returns the full updated chat."""
+    """Stream a message reply, calling ``on_delta`` per chunk.
+
+    Returns the full updated chat (from the final ``done`` event). Raises on a
+    provider error (surfaced as an ``error`` event) or an HTTP error.
+    """
     payload = {"content": content, "model": model, "temperature": temperature}
+    final_chat: dict | None = None
     async with _client(300) as client:
-        resp = await client.post(f"/chats/{chat_id}/messages", json=payload)
-        resp.raise_for_status()
-        return resp.json()
+        async with client.stream(
+            "POST", f"/chats/{chat_id}/messages", json=payload
+        ) as resp:
+            if resp.status_code >= 400:
+                await resp.aread()
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                kind = event.get("type")
+                if kind == "delta":
+                    on_delta(event["content"])
+                elif kind == "error":
+                    raise RuntimeError(event["detail"])
+                elif kind == "done":
+                    final_chat = event["chat"]
+    if final_chat is None:
+        raise RuntimeError("Stream ended without a completion event")
+    return final_chat

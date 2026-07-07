@@ -255,31 +255,45 @@ def register_pages() -> None:
                 _store_chat_id(chat["id"])
 
             text_input.value = ""
-            # Optimistically show the user's message + a thinking spinner.
+            # Optimistically show the user's message, then a streaming bubble.
             history.append({"role": "user", "content": content})
             render_history()
             with messages_col:
                 with _message_bubble("Assistant", is_user=False):
-                    ui.spinner(size="sm")
+                    spinner = ui.spinner(size="sm")
+                    reply_md = ui.markdown("").classes(
+                        "text-gray-800 break-words max-w-full"
+                    )
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
+
+            acc = {"text": "", "started": False}
+
+            def on_delta(chunk: str) -> None:
+                if not acc["started"]:
+                    spinner.delete()  # first token arrived
+                    acc["started"] = True
+                acc["text"] += chunk
+                reply_md.set_content(acc["text"])
+                messages_area.scroll_to(percent=1.0)
 
             updated: dict | None = None
             error: str | None = None
             try:
-                updated = await client.send_message(
+                updated = await client.stream_message(
                     state["chat_id"],
                     content,
                     model_select.value,
                     float(temperature.value or 0.7),
+                    on_delta,
                 )
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
 
             send_button.enable()
             if updated is not None:
-                # Re-sync from the server (source of truth); this also removes
-                # the optimistic bubbles when render_history() clears the column.
+                # Re-sync from the server (source of truth); this also replaces
+                # the streaming bubble when render_history() clears the column.
                 set_history(updated["messages"])
                 await render_chat_list()
             else:

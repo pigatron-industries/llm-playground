@@ -8,6 +8,8 @@ changes.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from openai import AsyncOpenAI
 
 from .config import ProviderConfig, get_active_provider
@@ -27,20 +29,26 @@ class LLMClient:
         resp = await self._client.models.list()
         return sorted(m.id for m in resp.data)
 
-    async def chat(
+    async def chat_stream(
         self,
         model: str,
         messages: list[Message],
         temperature: float = 0.7,
-    ) -> Message:
-        resp = await self._client.chat.completions.create(
+    ) -> AsyncIterator[str]:
+        """Yield assistant content deltas as they stream from the provider."""
+        stream = await self._client.chat.completions.create(
             model=model,
             # Only role/content — the API rejects extra fields like created_at.
             messages=[{"role": m.role, "content": m.content} for m in messages],
             temperature=temperature,
+            stream=True,
         )
-        content = resp.choices[0].message.content or ""
-        return Message(role="assistant", content=content)
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
 
 
 # A single client is reused across requests; provider config is fixed at startup.
