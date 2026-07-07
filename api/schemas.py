@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -10,9 +10,14 @@ from pydantic import BaseModel, Field
 Role = Literal["system", "user", "assistant"]
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class Message(BaseModel):
     role: Role
     content: str
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class ModelsResponse(BaseModel):

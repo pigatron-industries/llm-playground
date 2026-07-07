@@ -35,7 +35,8 @@ class LLMClient:
     ) -> Message:
         resp = await self._client.chat.completions.create(
             model=model,
-            messages=[m.model_dump() for m in messages],
+            # Only role/content — the API rejects extra fields like created_at.
+            messages=[{"role": m.role, "content": m.content} for m in messages],
             temperature=temperature,
         )
         content = resp.choices[0].message.content or ""

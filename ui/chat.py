@@ -12,6 +12,8 @@ from the backend.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import httpx
 from nicegui import app, ui
 
@@ -28,18 +30,30 @@ def _error_detail(exc: Exception) -> str:
     return str(exc)
 
 
-def _message_bubble(name: str, is_user: bool):
-    """Render a message row: participant name on the left, bubble on the right.
+def _format_time(iso: str | None) -> tuple[str, str]:
+    """Return (short, full) local-time strings for an ISO timestamp."""
+    if not iso:
+        return ("", "")
+    try:
+        local = datetime.fromisoformat(iso).astimezone()
+    except ValueError:
+        return ("", "")
+    return (local.strftime("%H:%M"), local.strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def _message_bubble(name: str, is_user: bool, timestamp: str | None = None):
+    """Render a message row: participant name (+ time) on the left, bubble right.
 
     Returns the (empty) bubble element so the caller can fill it with the
     message text or a spinner.
     """
     with ui.row().classes("w-full items-start gap-3 no-wrap py-1"):
-        name_color = "text-indigo-500" if is_user else "text-gray-400"
-        ui.label(name).classes(
-            f"{name_color} text-xs font-medium w-20 shrink-0 text-right pt-2 "
-            "select-none"
-        )
+        with ui.column().classes("w-20 shrink-0 items-end gap-0 pt-2 select-none"):
+            name_color = "text-indigo-500" if is_user else "text-gray-400"
+            ui.label(name).classes(f"{name_color} text-xs font-medium")
+            short, full = _format_time(timestamp)
+            if short:
+                ui.label(short).classes("text-[10px] text-gray-400").tooltip(full)
         bubble = ui.element("div").classes(
             "bg-gray-100 rounded-2xl px-4 py-2 grow min-w-0"
         )
@@ -140,7 +154,11 @@ def register_pages() -> None:
                     )
                 for msg in history:
                     is_user = msg["role"] == "user"
-                    with _message_bubble("You" if is_user else "Assistant", is_user):
+                    with _message_bubble(
+                        "You" if is_user else "Assistant",
+                        is_user,
+                        msg.get("created_at"),
+                    ):
                         if is_user:
                             # Keep user input verbatim (no markdown interpretation).
                             ui.label(msg["content"]).classes(
