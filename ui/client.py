@@ -67,6 +67,7 @@ async def stream_message(
     content: str,
     model: str,
     temperature: float,
+    system_prompt: str | None,
     on_delta: Callable[[str], None],
 ) -> dict:
     """Stream a message reply, calling ``on_delta`` per chunk.
@@ -74,7 +75,12 @@ async def stream_message(
     Returns the full updated chat (from the final ``done`` event). Raises on a
     provider error (surfaced as an ``error`` event) or an HTTP error.
     """
-    payload = {"content": content, "model": model, "temperature": temperature}
+    payload = {
+        "content": content,
+        "model": model,
+        "temperature": temperature,
+        "system_prompt": system_prompt,
+    }
     final_chat: dict | None = None
     async with _client(300) as client:
         async with client.stream(

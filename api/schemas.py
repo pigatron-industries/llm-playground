@@ -64,3 +64,4 @@ class SendMessageRequest(BaseModel):
     content: str
     model: str
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    system_prompt: str | None = None

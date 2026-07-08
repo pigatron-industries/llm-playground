@@ -90,7 +90,11 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
         raise HTTPException(status_code=404, detail="Chat not found")
 
     user_msg = Message(role="user", content=req.content)
-    conversation = chat.messages + [user_msg]
+    conversation: list[Message] = []
+    if req.system_prompt:
+        conversation.append(Message(role="system", content=req.system_prompt))
+    conversation.extend(chat.messages)
+    conversation.append(user_msg)
     client = get_client()
 
     async def events() -> AsyncIterator[str]:

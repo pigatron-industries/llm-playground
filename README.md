@@ -23,6 +23,8 @@ llm-playground/
 
 ## Setup
 
+Requires python 3.12
+
 ```bash
 cd llm-playground
 python3 -m venv .venv

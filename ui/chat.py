@@ -34,10 +34,10 @@ def _format_time(iso: str | None) -> tuple[str, str]:
     """Return (short, full) local-time strings for an ISO timestamp."""
     if not iso:
         return ("", "")
-    try:
-        local = datetime.fromisoformat(iso).astimezone()
-    except ValueError:
-        return ("", "")
+    # try:
+    local = datetime.fromisoformat(iso).astimezone()
+    # except ValueError:
+    #     return ("", "")
     return (local.strftime("%H:%M"), local.strftime("%Y-%m-%d %H:%M:%S"))
 
 
@@ -135,10 +135,14 @@ def register_pages() -> None:
                 options=[], with_input=True, label="Select a model"
             ).classes("w-full")
 
-            ui.separator().classes("my-3")
             temperature = ui.number(
                 "Temperature", value=0.7, min=0, max=2, step=0.1, format="%.1f"
             ).classes("w-full")
+            system_prompt = (
+                ui.textarea("System prompt", placeholder="Optional instructions for the assistant")
+                .classes("w-full")
+                .props("outlined autogrow dense")
+            )
 
         # --- Center: chat history ----------------------------------------
         messages_area = ui.scroll_area().classes("w-full flex-grow min-h-0")
@@ -285,6 +289,7 @@ def register_pages() -> None:
                     content,
                     model_select.value,
                     float(temperature.value or 0.7),
+                    (system_prompt.value or "").strip() or None,
                     on_delta,
                 )
             except Exception as exc:  # noqa: BLE001
