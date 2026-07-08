@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import httpx
 from openai import AsyncOpenAI
 
 from .config import ProviderConfig, get_active_provider
@@ -28,6 +29,39 @@ class LLMClient:
     async def list_models(self) -> list[str]:
         resp = await self._client.models.list()
         return sorted(m.id for m in resp.data)
+
+    async def model_context_lengths(self) -> dict[str, int]:
+        """Best-effort map of model id -> context window (tokens).
+
+        The OpenAI ``/v1/models`` surface carries no context-window size, so we
+        probe provider-native endpoints we recognise. LM Studio exposes this on
+        its REST API (``/api/v0/models``), a sibling of the ``/v1`` OpenAI
+        surface. Returns ``{}`` when nothing usable is available — callers treat
+        missing entries as "unknown".
+        """
+        base = self.config.base_url.rstrip("/")
+        if not base.endswith("/v1"):
+            return {}
+        native = f"{base[:-3]}/api/v0/models"  # .../v1 -> .../api/v0/models
+        headers = {}
+        if self.config.api_key and self.config.api_key != "not-needed":
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        try:
+            async with httpx.AsyncClient(timeout=5) as http:
+                resp = await http.get(native, headers=headers)
+                resp.raise_for_status()
+                entries = resp.json().get("data", [])
+        except Exception:  # noqa: BLE001 — provider may not expose this endpoint
+            return {}
+        lengths: dict[str, int] = {}
+        for entry in entries:
+            model_id = entry.get("id")
+            # Prefer the loaded window (what the model will actually accept)
+            # over the max the file supports.
+            ctx = entry.get("loaded_context_length") or entry.get("max_context_length")
+            if isinstance(model_id, str) and isinstance(ctx, int) and ctx > 0:
+                lengths[model_id] = ctx
+        return lengths
 
     async def chat_stream(
         self,

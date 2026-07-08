@@ -66,7 +66,7 @@ def register_pages() -> None:
         # Rendered conversation (mirror of the server-side chat) and the id of
         # the chat currently open.
         history: list[dict] = []
-        state: dict = {"chat_id": None}
+        state: dict = {"chat_id": None, "context_lengths": {}}
 
         def _stored_chat_id() -> str | None:
             try:
@@ -113,7 +113,7 @@ def register_pages() -> None:
 
             async def refresh_models() -> None:
                 try:
-                    models = await client.get_models()
+                    data = await client.get_models()
                 except Exception as exc:  # noqa: BLE001
                     ui.notify(
                         f"Could not load models: {_error_detail(exc)}",
@@ -121,10 +121,13 @@ def register_pages() -> None:
                         multi_line=True,
                     )
                     return
+                models = data.get("models", [])
+                state["context_lengths"] = data.get("context_lengths", {})
                 model_select.options = models
                 if models and model_select.value not in models:
                     model_select.value = models[0]
                 model_select.update()
+                update_context_usage()
 
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("Model").classes("text-sm font-medium text-gray-600")
@@ -143,6 +146,53 @@ def register_pages() -> None:
                 .classes("w-full")
                 .props("outlined autogrow dense")
             )
+
+            # --- Context window ------------------------------------------
+            ui.label("Context").classes("text-sm font-medium text-gray-600")
+            usage_bar = ui.linear_progress(value=0.0, show_value=False).props(
+                "rounded"
+            ).classes("w-full")
+            usage_label = ui.label("").classes("text-xs text-gray-500")
+
+        # --- Context usage -----------------------------------------------
+        def _estimate_tokens(text: str) -> int:
+            # Rough heuristic (~4 chars/token). Exact tokenisation is
+            # model-specific, but this is close enough to gauge how full the
+            # context window is — hence the "≈" in the display.
+            return (len(text) + 3) // 4 if text else 0
+
+        def _selected_context_length() -> int | None:
+            return state["context_lengths"].get(model_select.value)
+
+        def _conversation_tokens() -> int:
+            """Estimated tokens the next request will carry: system prompt +
+            stored history + whatever is currently typed in the input box."""
+            total = _estimate_tokens((system_prompt.value or "").strip())
+            for msg in history:
+                total += _estimate_tokens(msg.get("content", ""))
+            total += _estimate_tokens((text_input.value or "").strip())
+            return total
+
+        def update_context_usage() -> None:
+            limit = _selected_context_length()
+            used = _conversation_tokens()
+            if limit:
+                frac = used / limit
+                usage_bar.set_visibility(True)
+                usage_bar.value = min(frac, 1.0)
+                near = frac >= 0.9
+                usage_bar.props(f"color={'red' if near else 'primary'}")
+                usage_label.text = f"≈ {used:,} / {limit:,} tokens ({frac * 100:.0f}%)"
+                usage_label.classes(
+                    replace="text-xs " + ("text-red-500" if near else "text-gray-500")
+                )
+            else:
+                usage_bar.set_visibility(False)
+                usage_label.text = f"≈ {used:,} tokens"
+                usage_label.classes(replace="text-xs text-gray-500")
+
+        model_select.on_value_change(lambda: update_context_usage())
+        system_prompt.on_value_change(lambda: update_context_usage())
 
         # --- Center: chat history ----------------------------------------
         messages_area = ui.scroll_area().classes("w-full flex-grow min-h-0")
@@ -202,6 +252,7 @@ def register_pages() -> None:
         def set_history(messages: list[dict]) -> None:
             history[:] = messages
             render_history()
+            update_context_usage()
             messages_area.scroll_to(percent=1.0)
 
         async def load_chat(chat_id: str) -> None:
@@ -245,6 +296,7 @@ def register_pages() -> None:
                     .props("outlined autogrow dense")
                 )
                 send_button = ui.button(icon="send").props("round")
+        text_input.on("keyup", lambda: update_context_usage())
 
         async def send() -> None:
             content = (text_input.value or "").strip()

@@ -25,11 +25,12 @@ async def get_provider() -> dict:
         return resp.json()
 
 
-async def get_models() -> list[str]:
+async def get_models() -> dict:
+    """Return the models payload: ``{"models": [...], "context_lengths": {...}}``."""
     async with _client(30) as client:
         resp = await client.get("/models")
         resp.raise_for_status()
-        return resp.json()["models"]
+        return resp.json()
 
 
 # --- Stored chats ----------------------------------------------------------

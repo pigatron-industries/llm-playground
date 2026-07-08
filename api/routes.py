@@ -42,7 +42,10 @@ async def list_models() -> ModelsResponse:
         ) from exc
     except APIStatusError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return ModelsResponse(provider=client.config.name, models=models)
+    context_lengths = await client.model_context_lengths()
+    return ModelsResponse(
+        provider=client.config.name, models=models, context_lengths=context_lengths
+    )
 
 
 # --- Stored chats ----------------------------------------------------------

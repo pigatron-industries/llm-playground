@@ -55,8 +55,9 @@ python app.py --host 0.0.0.0 --port 9000   # expose on the network
 
 Open http://127.0.0.1:8080 (or whatever host/port you chose).
 
-- Left sidebar: pick the model (loaded live from the provider) and temperature.
+- Left sidebar: your stored chats (+ New chat).
 - Center: chat history.
+- Right sidebar: model selector and temperature.
 - Bottom: type a message and press Enter (or the send button).
 
 ## Configuration (modular provider)

@@ -23,6 +23,9 @@ class Message(BaseModel):
 class ModelsResponse(BaseModel):
     provider: str
     models: list[str]
+    # Best-effort map of model id -> context window (tokens). Empty/absent
+    # entries mean the provider didn't expose a value (shown as "unknown").
+    context_lengths: dict[str, int] = Field(default_factory=dict)
 
 
 class ProviderInfo(BaseModel):
