@@ -33,6 +33,29 @@ async def get_models() -> dict:
         return resp.json()
 
 
+# --- Projects --------------------------------------------------------------
+
+
+async def list_projects() -> list[dict]:
+    async with _client(10) as client:
+        resp = await client.get("/projects")
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def create_project(name: str, path: str) -> dict:
+    async with _client(10) as client:
+        resp = await client.post("/projects", json={"name": name, "path": path})
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def delete_project(project_id: str) -> None:
+    async with _client(10) as client:
+        resp = await client.delete(f"/projects/{project_id}")
+        resp.raise_for_status()
+
+
 # --- Stored chats ----------------------------------------------------------
 
 

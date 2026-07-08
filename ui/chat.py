@@ -66,7 +66,7 @@ def register_pages() -> None:
         # Rendered conversation (mirror of the server-side chat) and the id of
         # the chat currently open.
         history: list[dict] = []
-        state: dict = {"chat_id": None, "context_lengths": {}}
+        state: dict = {"chat_id": None, "project_id": None, "context_lengths": {}}
 
         def _stored_chat_id() -> str | None:
             try:
@@ -77,6 +77,18 @@ def register_pages() -> None:
         def _store_chat_id(chat_id: str | None) -> None:
             try:
                 app.storage.user["chat_id"] = chat_id
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _stored_project_id() -> str | None:
+            try:
+                return app.storage.user.get("project_id")
+            except Exception:  # noqa: BLE001 — storage may be unavailable
+                return None
+
+        def _store_project_id(project_id: str | None) -> None:
+            try:
+                app.storage.user["project_id"] = project_id
             except Exception:  # noqa: BLE001
                 pass
 
@@ -99,8 +111,16 @@ def register_pages() -> None:
             provider_label = ui.label("").classes("text-sm opacity-80")
 
         # --- Left sidebar -------------------------------------------------
-        # --- Left sidebar: chats -----------------------------------------
         with ui.left_drawer(bordered=True).classes("bg-gray-50").props("width=280"):
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.label("Projects").classes("text-sm font-medium text-gray-600")
+                ui.button(icon="add", on_click=lambda: open_add_project_dialog()).props(
+                    "flat dense round size=sm"
+                ).tooltip("Add project")
+            project_list = ui.column().classes("w-full gap-1 mt-2")
+
+            ui.separator().classes("w-full my-3")
+
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("Chats").classes("text-sm font-medium text-gray-600")
                 ui.button("New", icon="add", on_click=lambda: new_chat()).props(
@@ -198,6 +218,108 @@ def register_pages() -> None:
         messages_area = ui.scroll_area().classes("w-full flex-grow min-h-0")
         with messages_area:
             messages_col = ui.column().classes("w-full max-w-5xl mx-auto gap-2 p-4")
+
+        projects: list[dict[str, str]] = []
+
+        async def load_projects() -> None:
+            try:
+                projects[:] = await client.list_projects()
+            except Exception:  # noqa: BLE001
+                projects[:] = []
+            displayed_projects = [{"id": None, "name": "No project", "path": ""}] + projects
+            stored_project_id = _stored_project_id()
+            if stored_project_id and any(p.get("id") == stored_project_id for p in projects):
+                state["project_id"] = stored_project_id
+            else:
+                state["project_id"] = None
+                _store_project_id(None)
+            projects[:] = displayed_projects
+            render_projects()
+
+        def select_project(project_id: str | None) -> None:
+            state["project_id"] = project_id
+            _store_project_id(project_id)
+            render_projects()
+
+        def open_add_project_dialog() -> None:
+            dialog = ui.dialog()
+            with dialog, ui.card().classes("w-[360px]"):
+                ui.label("Add project").classes("text-base font-medium")
+                project_name_input = ui.input("Name", placeholder="My project").classes(
+                    "w-full"
+                )
+                project_path_input = ui.input("Folder", placeholder="/path/to/project").classes(
+                    "w-full"
+                )
+                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                    ui.button("Cancel", on_click=dialog.close).props("flat")
+                    ui.button(
+                        "Add",
+                        on_click=lambda: add_project(
+                            project_name_input.value, project_path_input.value, dialog
+                        ),
+                    ).props("flat")
+            dialog.open()
+
+        async def add_project(
+            name: str | None = None, path: str | None = None, dialog=None
+        ) -> None:
+            clean_name = (name or "").strip()
+            clean_path = (path or "").strip()
+            if not clean_name or not clean_path:
+                ui.notify("Enter both a project name and folder path.", type="warning")
+                return
+            try:
+                created = await client.create_project(clean_name, clean_path)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not save project: {_error_detail(exc)}", type="negative")
+                return
+            projects.append({"id": created["id"], "name": created["name"], "path": created["path"]})
+            select_project(created["id"])
+            if dialog is not None:
+                dialog.close()
+
+        def render_projects() -> None:
+            project_list.clear()
+            with project_list:
+                if not projects:
+                    ui.label("No projects yet").classes("text-xs text-gray-400")
+                    return
+                for project in projects:
+                    current = project.get("id") == state["project_id"]
+                    row_bg = "bg-indigo-100" if current else "hover:bg-gray-200"
+                    with ui.row().classes(
+                        f"w-full items-center no-wrap gap-0 rounded {row_bg}"
+                    ):
+                        ui.button(
+                            project.get("name", "Untitled"),
+                            on_click=lambda pid=project.get("id"): select_project(pid),
+                        ).props("flat dense no-caps align=left").classes(
+                            "flex-grow min-w-0 justify-start normal-case ellipsis"
+                        )
+                        if project.get("id") is not None:
+                            ui.button(
+                                icon="delete",
+                                on_click=lambda _, p=project: remove_project(p),
+                            ).props("flat dense round size=sm").classes("text-gray-400")
+
+        async def remove_project(project: dict[str, str]) -> None:
+            project_id = project.get("id")
+            if not project_id:
+                return
+            try:
+                await client.delete_project(project_id)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not delete project: {_error_detail(exc)}", type="negative")
+                return
+            if project.get("id") == state["project_id"]:
+                state["project_id"] = None
+                _store_project_id(None)
+            try:
+                projects.remove(project)
+            except ValueError:
+                pass
+            render_projects()
 
         def render_history() -> None:
             messages_col.clear()
@@ -364,6 +486,7 @@ def register_pages() -> None:
 
         # --- Initial load -------------------------------------------------
         render_history()
+        await load_projects()
         try:
             info = await client.get_provider()
             provider_label.text = f"{info['name']} · {info['base_url']}"

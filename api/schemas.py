@@ -63,6 +63,17 @@ class CreateChatRequest(BaseModel):
     model: str | None = None
 
 
+class Project(BaseModel):
+    id: str
+    name: str
+    path: str
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    path: str
+
+
 class SendMessageRequest(BaseModel):
     content: str
     model: str

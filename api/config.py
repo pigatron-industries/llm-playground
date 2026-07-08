@@ -91,3 +91,11 @@ def get_chats_dir() -> Path:
     if raw:
         return Path(raw).expanduser()
     return PROJECT_ROOT / "data" / "chats"
+
+
+def get_projects_file() -> Path:
+    """Path to the JSON file that stores the project list."""
+    raw = os.getenv("PROJECTS_FILE")
+    if raw:
+        return Path(raw).expanduser()
+    return PROJECT_ROOT / "data" / "projects.json"

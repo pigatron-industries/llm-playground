@@ -9,13 +9,16 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from openai import APIConnectionError, APIStatusError
 
+from .project_store import get_project_store
 from .providers import get_client
 from .schemas import (
     Chat,
     ChatSummary,
     CreateChatRequest,
+    CreateProjectRequest,
     Message,
     ModelsResponse,
+    Project,
     ProviderInfo,
     SendMessageRequest,
 )
@@ -49,6 +52,22 @@ async def list_models() -> ModelsResponse:
 
 
 # --- Stored chats ----------------------------------------------------------
+
+
+@router.get("/projects", response_model=list[Project])
+def list_projects() -> list[Project]:
+    return get_project_store().list()
+
+
+@router.post("/projects", response_model=Project)
+def create_project(req: CreateProjectRequest) -> Project:
+    return get_project_store().create(name=req.name, path=req.path)
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+def delete_project(project_id: str) -> None:
+    if not get_project_store().delete(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
 
 
 @router.post("/chats", response_model=Chat)
