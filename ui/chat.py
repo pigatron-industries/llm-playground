@@ -123,8 +123,8 @@ def register_pages() -> None:
 
             with ui.row().classes("w-full items-center justify-between no-wrap"):
                 ui.label("Chats").classes("text-sm font-medium text-gray-600")
-                ui.button("New", icon="add", on_click=lambda: new_chat()).props(
-                    "flat dense no-caps"
+                ui.button(icon="add", on_click=lambda: new_chat()).props(
+                    "flat dense round size=sm"
                 )
             chat_list = ui.column().classes("w-full gap-1")
 
