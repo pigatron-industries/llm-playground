@@ -62,6 +62,20 @@ def _message_bubble(name: str, is_user: bool, timestamp: str | None = None):
     return bubble
 
 
+def _assistant_tool_report(message: dict) -> str:
+    """Render persisted assistant tool-call metadata as markdown."""
+    calls = message.get("tool_calls") or []
+    if not calls:
+        return ""
+
+    lines: list[str] = []
+    for call in calls:
+        name = call.get("name", "unknown_tool")
+        arguments = call.get("arguments", "{}")
+        lines.append(f"**Tool call:** `{name}({arguments})`")
+    return "\n\n".join(lines)
+
+
 def register_pages() -> None:
     @ui.page("/")
     async def chat_page() -> None:
@@ -333,11 +347,22 @@ def register_pages() -> None:
                 for msg in history:
                     is_user = msg["role"] == "user"
                     if msg["role"] == "tool":
+                        with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
+                            ui.markdown(
+                                f"**Result:** `{msg.get('content', '')}`",
+                                extras=["fenced-code-blocks", "tables"],
+                            ).classes("text-gray-800 break-words max-w-full")
                         continue
-                    if msg["role"] == "assistant" and msg.get("tool_calls") and not (
-                        msg.get("content") or ""
-                    ).strip():
-                        continue
+
+                    if msg["role"] == "assistant":
+                        tool_report = _assistant_tool_report(msg)
+                        content = msg.get("content") or ""
+                        body = "\n\n".join(part for part in [tool_report, content] if part.strip())
+                        if not body.strip():
+                            continue
+                    else:
+                        body = msg.get("content", "")
+
                     with _message_bubble(
                         "You" if is_user else "Assistant",
                         is_user,
@@ -345,13 +370,13 @@ def register_pages() -> None:
                     ):
                         if is_user:
                             # Keep user input verbatim (no markdown interpretation).
-                            ui.label(msg["content"]).classes(
+                            ui.label(body).classes(
                                 "text-gray-800 whitespace-pre-wrap break-words"
                             )
                         else:
                             # Render assistant replies as markdown.
                             ui.markdown(
-                                msg["content"],
+                                body,
                                 extras=["fenced-code-blocks", "tables"],
                             ).classes("text-gray-800 break-words max-w-full")
 
@@ -441,41 +466,67 @@ def register_pages() -> None:
                 _store_chat_id(chat["id"])
 
             text_input.value = ""
-            # Optimistically show the user's message, then a streaming bubble.
+            # Optimistically show the user's message.
             history.append({"role": "user", "content": content})
             render_history()
-            with messages_col:
-                with _message_bubble("Assistant", is_user=False):
-                    spinner = ui.spinner(size="sm")
-                    reply_md = ui.markdown("").classes(
-                        "text-gray-800 break-words max-w-full"
-                    )
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
 
-            acc = {"text": "", "started": False}
+            # Streaming render state. A fresh "Assistant" bubble (with its own
+            # spinner) is opened whenever the model still owes us output —
+            # initially, and again after every tool result — so the live view
+            # mirrors how a finished turn is persisted (one bubble per
+            # assistant/tool step, see render_history) and there's always
+            # visible feedback while waiting on the next round from the
+            # provider. Bubbles are created inside an explicit
+            # ``with messages_col:`` each time because these callbacks fire
+            # from async event handling, well after any earlier ``with``
+            # block has closed — creating elements without that explicit
+            # context would silently attach them to the wrong container.
+            live: dict = {"bubble": None, "spinner": None, "md": None, "text": ""}
+
+            def open_assistant_bubble() -> None:
+                with messages_col:
+                    bubble = _message_bubble("Assistant", is_user=False)
+                    with bubble:
+                        spinner = ui.spinner(size="sm")
+                        md = ui.markdown("").classes(
+                            "text-gray-800 break-words max-w-full"
+                        )
+                live.update(bubble=bubble, spinner=spinner, md=md, text="")
+                messages_area.scroll_to(percent=1.0)
+
+            def hide_spinner() -> None:
+                if live["spinner"] is not None:
+                    live["spinner"].delete()
+                    live["spinner"] = None
+
+            open_assistant_bubble()
 
             def on_delta(chunk: str) -> None:
-                if not acc["started"]:
-                    spinner.delete()  # first token arrived
-                    acc["started"] = True
-                acc["text"] += chunk
-                reply_md.set_content(acc["text"])
+                hide_spinner()
+                live["text"] += chunk
+                live["md"].set_content(live["text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_call(name: str, arguments: dict) -> None:
-                if not acc["started"]:
-                    spinner.delete()
-                    acc["started"] = True
+                hide_spinner()
                 args_text = ", ".join(f"{key}={value}" for key, value in arguments.items())
-                acc["text"] += f"\n\n**Tool call:** `{name}({args_text})`\n"
-                reply_md.set_content(acc["text"])
+                live["text"] += f"**Tool call:** `{name}({args_text})`"
+                live["md"].set_content(live["text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
-                acc["text"] += f"**Result:** `{result}`\n\n"
-                reply_md.set_content(acc["text"])
-                messages_area.scroll_to(percent=1.0)
+                with messages_col:
+                    with _message_bubble("Tool", is_user=False):
+                        ui.markdown(
+                            f"**Result:** `{result}`",
+                            extras=["fenced-code-blocks", "tables"],
+                        ).classes("text-gray-800 break-words max-w-full")
+                # The model still owes a response to this result (more tool
+                # calls, or the final answer) — open a fresh bubble+spinner so
+                # the wait is never silent.
+                open_assistant_bubble()
 
             updated: dict | None = None
             error: str | None = None
@@ -495,6 +546,7 @@ def register_pages() -> None:
                 error = _error_detail(exc)
 
             send_button.enable()
+            hide_spinner()
             if updated is not None:
                 # Re-sync from the server (source of truth); this also replaces
                 # the streaming bubble when render_history() clears the column.

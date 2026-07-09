@@ -13,6 +13,25 @@ from ..store import get_store
 from ..tools import DEFAULT_TOOLS
 
 
+def _history_for_model(messages: list[Message]) -> list[Message]:
+    """Build provider context without replaying historical tool-use entries.
+
+    We keep tool calls/results in persisted chat history for observability, but
+    avoid resending them on later turns to reduce prompt bloat.
+    """
+    sanitized: list[Message] = []
+    for message in messages:
+        if message.role == "tool":
+            continue
+        if message.role == "assistant" and message.tool_calls:
+            if message.content:
+                # Keep any visible assistant text, but strip tool-call metadata.
+                sanitized.append(Message(role="assistant", content=message.content))
+            continue
+        sanitized.append(message)
+    return sanitized
+
+
 async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIterator[str]:
     """Handle chat message submission and streaming the assistant response."""
     store = get_store()
@@ -24,7 +43,7 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
     conversation: list[Message] = []
     if req.system_prompt:
         conversation.append(Message(role="system", content=req.system_prompt))
-    conversation.extend(chat.messages)
+    conversation.extend(_history_for_model(chat.messages))
     conversation.append(user_msg)
     client = get_client()
     tools = req.tools if req.tools is not None else DEFAULT_TOOLS
