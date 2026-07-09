@@ -7,16 +7,24 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Role = Literal["system", "user", "assistant"]
+Role = Literal["system", "user", "assistant", "tool"]
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: str
+
+
 class Message(BaseModel):
     role: Role
-    content: str
+    content: str = ""
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -79,3 +87,4 @@ class SendMessageRequest(BaseModel):
     model: str
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     system_prompt: str | None = None
+    tools: list[dict] | None = None

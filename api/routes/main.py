@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from openai import APIConnectionError, APIStatusError
 
-from .project_store import get_project_store
-from .providers import get_client
-from .schemas import (
+from ..project_store import get_project_store
+from ..providers import get_client
+from ..schemas import (
     Chat,
     ChatSummary,
     CreateChatRequest,
@@ -22,7 +21,8 @@ from .schemas import (
     ProviderInfo,
     SendMessageRequest,
 )
-from .store import get_store
+from ..service import handle_send_message
+from ..store import get_store
 
 router = APIRouter(prefix="/api")
 
@@ -99,9 +99,11 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
     """Stream the assistant reply as newline-delimited JSON events.
 
     Each line is one of:
-      {"type": "delta", "content": "..."}   incremental text
-      {"type": "done",  "chat": {...}}      final persisted chat
-      {"type": "error", "detail": "..."}    provider failure (mid-stream)
+      {"type": "delta", "content": "..."}              incremental text
+      {"type": "tool_call", "name": "...", "arguments": {...}}
+      {"type": "tool_result", "name": "...", "result": "..."}
+      {"type": "done",  "chat": {...}}                 final persisted chat
+      {"type": "error", "detail": "..."}               provider failure (mid-stream)
 
     The user + assistant messages are persisted only after a successful
     completion, so a failed stream leaves the stored chat untouched.
@@ -111,35 +113,11 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    user_msg = Message(role="user", content=req.content)
-    conversation: list[Message] = []
-    if req.system_prompt:
-        conversation.append(Message(role="system", content=req.system_prompt))
-    conversation.extend(chat.messages)
-    conversation.append(user_msg)
-    client = get_client()
-
     async def events() -> AsyncIterator[str]:
-        parts: list[str] = []
         try:
-            async for delta in client.chat_stream(
-                model=req.model, messages=conversation, temperature=req.temperature
-            ):
-                parts.append(delta)
-                yield json.dumps({"type": "delta", "content": delta}) + "\n"
-        except APIConnectionError as exc:
-            detail = f"Could not reach provider at {client.config.base_url}: {exc}"
-            yield json.dumps({"type": "error", "detail": detail}) + "\n"
-            return
-        except Exception as exc:  # noqa: BLE001 — any provider error mid-stream
-            yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
-            return
-
-        # Persist both sides only after a successful completion.
-        store.add_message(chat_id, user_msg)
-        store.add_message(chat_id, Message(role="assistant", content="".join(parts)))
-        store.set_model(chat_id, req.model)
-        updated = store.get(chat_id)
-        yield json.dumps({"type": "done", "chat": updated.model_dump(mode="json")}) + "\n"
+            async for event in handle_send_message(chat_id, req):
+                yield event
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Chat not found") from exc
 
     return StreamingResponse(events(), media_type="application/x-ndjson")

@@ -8,13 +8,67 @@ changes.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from openai import AsyncOpenAI
 
 from .config import ProviderConfig, get_active_provider
-from .schemas import Message
+from .schemas import Message, ToolCall
+from .tools import execute_tool
+
+
+@dataclass(frozen=True)
+class TextDelta:
+    content: str
+
+
+@dataclass(frozen=True)
+class ToolCallEvent:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolResultEvent:
+    name: str
+    result: str
+
+
+@dataclass(frozen=True)
+class StreamComplete:
+    """New assistant/tool messages produced during the tool loop."""
+
+    messages: list[Message]
+
+
+ChatEvent = TextDelta | ToolCallEvent | ToolResultEvent | StreamComplete
+
+
+def message_to_api(message: Message) -> dict[str, Any]:
+    """Serialize a stored message for the OpenAI-compatible chat API."""
+    payload: dict[str, Any] = {"role": message.role}
+    if message.role == "tool":
+        payload["tool_call_id"] = message.tool_call_id
+        payload["content"] = message.content
+        return payload
+    if message.tool_calls:
+        payload["content"] = message.content or None
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments},
+            }
+            for call in message.tool_calls
+        ]
+        return payload
+    payload["content"] = message.content
+    return payload
 
 
 class LLMClient:
@@ -23,7 +77,7 @@ class LLMClient:
         self._client = AsyncOpenAI(
             base_url=self.config.base_url,
             # Many local servers ignore the key but the SDK requires a non-empty one.
-            api_key=self.config.api_key or "not-needed",
+            api_key=self.config.api_key or "not-needed"
         )
 
     async def list_models(self) -> list[str]:
@@ -68,21 +122,85 @@ class LLMClient:
         model: str,
         messages: list[Message],
         temperature: float = 0.7,
-    ) -> AsyncIterator[str]:
-        """Yield assistant content deltas as they stream from the provider."""
-        stream = await self._client.chat.completions.create(
-            model=model,
-            # Only role/content — the API rejects extra fields like created_at.
-            messages=[{"role": m.role, "content": m.content} for m in messages],
-            temperature=temperature,
-            stream=True,
-        )
-        async for chunk in stream:
-            if not chunk.choices:
+        tools: list[dict] | None = None,
+    ) -> AsyncIterator[ChatEvent]:
+        """Stream assistant text and tool-call events from the provider.
+
+        When the model requests tools, each call is executed locally and the
+        conversation continues until the model returns a final text answer.
+        """
+        api_messages = [message_to_api(message) for message in messages]
+        produced: list[Message] = []
+
+        while True:
+            stream = await self._client.chat.completions.create(
+                model=model,
+                messages=api_messages,
+                temperature=temperature,
+                tools=tools or None,
+                tool_choice="auto" if tools else None,
+                stream=True,
+            )
+
+            content_parts: list[str] = []
+            tool_calls_acc: dict[int, dict[str, str]] = {}
+
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    content_parts.append(delta.content)
+                    yield TextDelta(delta.content)
+
+                if delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        index = tool_call.index
+                        if index not in tool_calls_acc:
+                            tool_calls_acc[index] = {"id": "", "name": "", "arguments": ""}
+                        entry = tool_calls_acc[index]
+                        if tool_call.id:
+                            entry["id"] = tool_call.id
+                        if tool_call.function.name:
+                            entry["name"] = tool_call.function.name
+                        if tool_call.function.arguments:
+                            entry["arguments"] += tool_call.function.arguments
+
+            if tool_calls_acc:
+                ordered = [tool_calls_acc[index] for index in sorted(tool_calls_acc)]
+                assistant_message = Message(
+                    role="assistant",
+                    content="".join(content_parts),
+                    tool_calls=[
+                        ToolCall(id=entry["id"], name=entry["name"], arguments=entry["arguments"])
+                        for entry in ordered
+                    ],
+                )
+                produced.append(assistant_message)
+                api_messages.append(message_to_api(assistant_message))
+
+                for entry in ordered:
+                    try:
+                        arguments = json.loads(entry["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    yield ToolCallEvent(id=entry["id"], name=entry["name"], arguments=arguments)
+                    result = execute_tool(entry["name"], arguments)
+                    yield ToolResultEvent(name=entry["name"], result=result)
+                    tool_message = Message(
+                        role="tool",
+                        content=result,
+                        tool_call_id=entry["id"],
+                    )
+                    produced.append(tool_message)
+                    api_messages.append(message_to_api(tool_message))
                 continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+
+            final_text = "".join(content_parts)
+            produced.append(Message(role="assistant", content=final_text))
+            yield StreamComplete(messages=produced)
+            return
 
 
 # A single client is reused across requests; provider config is fixed at startup.

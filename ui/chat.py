@@ -17,6 +17,8 @@ from datetime import datetime
 import httpx
 from nicegui import app, ui
 
+from api.tools import DEFAULT_TOOLS
+
 from . import client
 
 
@@ -330,6 +332,12 @@ def register_pages() -> None:
                     )
                 for msg in history:
                     is_user = msg["role"] == "user"
+                    if msg["role"] == "tool":
+                        continue
+                    if msg["role"] == "assistant" and msg.get("tool_calls") and not (
+                        msg.get("content") or ""
+                    ).strip():
+                        continue
                     with _message_bubble(
                         "You" if is_user else "Assistant",
                         is_user,
@@ -455,6 +463,20 @@ def register_pages() -> None:
                 reply_md.set_content(acc["text"])
                 messages_area.scroll_to(percent=1.0)
 
+            def on_tool_call(name: str, arguments: dict) -> None:
+                if not acc["started"]:
+                    spinner.delete()
+                    acc["started"] = True
+                args_text = ", ".join(f"{key}={value}" for key, value in arguments.items())
+                acc["text"] += f"\n\n**Tool call:** `{name}({args_text})`\n"
+                reply_md.set_content(acc["text"])
+                messages_area.scroll_to(percent=1.0)
+
+            def on_tool_result(name: str, result: str) -> None:
+                acc["text"] += f"**Result:** `{result}`\n\n"
+                reply_md.set_content(acc["text"])
+                messages_area.scroll_to(percent=1.0)
+
             updated: dict | None = None
             error: str | None = None
             try:
@@ -464,7 +486,10 @@ def register_pages() -> None:
                     model_select.value,
                     float(temperature.value or 0.7),
                     (system_prompt.value or "").strip() or None,
+                    DEFAULT_TOOLS,
                     on_delta,
+                    on_tool_call,
+                    on_tool_result,
                 )
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
@@ -484,31 +509,34 @@ def register_pages() -> None:
         send_button.on("click", send)
         text_input.on("keydown.enter", send)
 
-        # --- Initial load -------------------------------------------------
-        render_history()
-        await load_projects()
-        try:
-            info = await client.get_provider()
-            provider_label.text = f"{info['name']} · {info['base_url']}"
-        except Exception:  # noqa: BLE001
-            provider_label.text = "provider unavailable"
-        await refresh_models()
-
-        # Restore the current chat across refreshes; otherwise open the most
-        # recent, or create a fresh one.
-        loaded = False
-        stored_id = _stored_chat_id()
-        if stored_id:
+        async def initial_load() -> None:
+            render_history()
+            await load_projects()
             try:
-                await load_chat(stored_id)
-                loaded = True
-            except Exception:  # noqa: BLE001 — chat was deleted / server restarted
-                loaded = False
-        if not loaded:
-            chats = await client.list_chats()
-            if chats:
-                await load_chat(chats[0]["id"])
-            else:
-                fresh = await client.create_chat(model=model_select.value)
-                await load_chat(fresh["id"])
-        await render_chat_list()
+                info = await client.get_provider()
+                provider_label.text = f"{info['name']} · {info['base_url']}"
+            except Exception:  # noqa: BLE001
+                provider_label.text = "provider unavailable"
+            await refresh_models()
+
+            # Restore the current chat across refreshes; otherwise open the most
+            # recent, or create a fresh one.
+            loaded = False
+            stored_id = _stored_chat_id()
+            if stored_id:
+                try:
+                    await load_chat(stored_id)
+                    loaded = True
+                except Exception:  # noqa: BLE001 — chat was deleted / server restarted
+                    loaded = False
+            if not loaded:
+                chats = await client.list_chats()
+                if chats:
+                    await load_chat(chats[0]["id"])
+                else:
+                    fresh = await client.create_chat(model=model_select.value)
+                    await load_chat(fresh["id"])
+            await render_chat_list()
+
+        # NiceGUI must send the page within ~3s; defer slow provider/chat IO.
+        ui.timer(0.0, initial_load, once=True)

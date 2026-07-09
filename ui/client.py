@@ -27,7 +27,7 @@ async def get_provider() -> dict:
 
 async def get_models() -> dict:
     """Return the models payload: ``{"models": [...], "context_lengths": {...}}``."""
-    async with _client(30) as client:
+    async with _client(5) as client:
         resp = await client.get("/models")
         resp.raise_for_status()
         return resp.json()
@@ -92,7 +92,10 @@ async def stream_message(
     model: str,
     temperature: float,
     system_prompt: str | None,
+    tools: list[dict] | None,
     on_delta: Callable[[str], None],
+    on_tool_call: Callable[[str, dict], None] | None = None,
+    on_tool_result: Callable[[str, str], None] | None = None,
 ) -> dict:
     """Stream a message reply, calling ``on_delta`` per chunk.
 
@@ -104,6 +107,7 @@ async def stream_message(
         "model": model,
         "temperature": temperature,
         "system_prompt": system_prompt,
+        "tools": tools,
     }
     final_chat: dict | None = None
     async with _client(300) as client:
@@ -120,6 +124,10 @@ async def stream_message(
                 kind = event.get("type")
                 if kind == "delta":
                     on_delta(event["content"])
+                elif kind == "tool_call" and on_tool_call is not None:
+                    on_tool_call(event["name"], event.get("arguments", {}))
+                elif kind == "tool_result" and on_tool_result is not None:
+                    on_tool_result(event["name"], event["result"])
                 elif kind == "error":
                     raise RuntimeError(event["detail"])
                 elif kind == "done":
