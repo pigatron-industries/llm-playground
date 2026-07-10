@@ -56,12 +56,18 @@ class ChatStore:
 
     # --- interface ----------------------------------------------------
 
-    def create(self, title: str | None = None, model: str | None = None) -> Chat:
+    def create(
+        self,
+        title: str | None = None,
+        workflow_id: str = "simple_chat",
+        workflow_settings: dict | None = None,
+    ) -> Chat:
         now = _now()
         chat = Chat(
             id=uuid.uuid4().hex,
             title=title or _DEFAULT_TITLE,
-            model=model,
+            workflow_id=workflow_id,
+            workflow_settings=workflow_settings or {},
             created_at=now,
             updated_at=now,
             messages=[],
@@ -92,12 +98,22 @@ class ChatStore:
         self._write(chat)
         return chat
 
-    def set_model(self, chat_id: str, model: str) -> None:
+    def update(
+        self,
+        chat_id: str,
+        workflow_id: str | None = None,
+        workflow_settings: dict | None = None,
+    ) -> Chat:
         chat = self.get(chat_id)
         if chat is None:
             raise KeyError(chat_id)
-        chat.model = model
+        if workflow_id is not None:
+            chat.workflow_id = workflow_id
+        if workflow_settings is not None:
+            chat.workflow_settings = workflow_settings
+        chat.updated_at = _now()
         self._write(chat)
+        return chat
 
     def delete(self, chat_id: str) -> bool:
         path = self._path(chat_id)
@@ -111,7 +127,7 @@ class ChatStore:
         return ChatSummary(
             id=chat.id,
             title=chat.title,
-            model=chat.model,
+            workflow_id=chat.workflow_id,
             created_at=chat.created_at,
             updated_at=chat.updated_at,
             message_count=len(chat.messages),

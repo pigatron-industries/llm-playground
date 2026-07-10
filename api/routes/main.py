@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from openai import APIConnectionError, APIStatusError
+from pydantic import ValidationError
 
 from ..project_store import get_project_store
 from ..providers import get_client
@@ -20,9 +21,12 @@ from ..schemas import (
     Project,
     ProviderInfo,
     SendMessageRequest,
+    UpdateChatRequest,
+    WorkflowInfo,
 )
 from ..service import handle_send_message
 from ..store import get_store
+from ..workflows import get_workflow, list_workflows
 
 router = APIRouter(prefix="/api")
 
@@ -51,6 +55,11 @@ async def list_models() -> ModelsResponse:
     )
 
 
+@router.get("/workflows", response_model=list[WorkflowInfo])
+def list_available_workflows() -> list[WorkflowInfo]:
+    return list_workflows()
+
+
 # --- Stored chats ----------------------------------------------------------
 
 
@@ -72,7 +81,66 @@ def delete_project(project_id: str) -> None:
 
 @router.post("/chats", response_model=Chat)
 def create_chat(req: CreateChatRequest) -> Chat:
-    return get_store().create(title=req.title, model=req.model)
+    try:
+        workflow = get_workflow(req.workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        settings = workflow.settings_model.model_validate(req.workflow_settings)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+    return get_store().create(
+        title=req.title,
+        workflow_id=req.workflow_id,
+        workflow_settings=settings.model_dump(),
+    )
+
+
+@router.patch("/chats/{chat_id}", response_model=Chat)
+def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
+    """Update a chat's workflow and/or its settings.
+
+    ``workflow_id`` may only change while the chat has no messages yet (the
+    UI locks that control after the first send — see ``ui/chat.py``).
+    ``workflow_settings`` can change at any time and takes effect on the next
+    turn. Switching workflow requires supplying fresh settings for the new
+    workflow's schema in the same request — the old settings won't validate
+    against a different workflow.
+    """
+    store = get_store()
+    chat = store.get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    workflow_id = chat.workflow_id
+    if req.workflow_id is not None and req.workflow_id != chat.workflow_id:
+        if chat.messages:
+            raise HTTPException(
+                status_code=400, detail="Cannot change workflow after the first message."
+            )
+        if req.workflow_settings is None:
+            raise HTTPException(
+                status_code=400,
+                detail="workflow_settings must be provided when changing workflow_id.",
+            )
+        workflow_id = req.workflow_id
+
+    try:
+        workflow = get_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    settings_input = (
+        req.workflow_settings if req.workflow_settings is not None else chat.workflow_settings
+    )
+    try:
+        settings = workflow.settings_model.model_validate(settings_input)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+
+    return store.update(
+        chat_id, workflow_id=workflow_id, workflow_settings=settings.model_dump()
+    )
 
 
 @router.get("/chats", response_model=list[ChatSummary])

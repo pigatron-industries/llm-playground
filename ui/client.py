@@ -33,6 +33,14 @@ async def get_models() -> dict:
         return resp.json()
 
 
+async def get_workflows() -> list[dict]:
+    """Return ``[{"id", "name", "description", "settings_schema"}, ...]``."""
+    async with _client(10) as client:
+        resp = await client.get("/workflows")
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --- Projects --------------------------------------------------------------
 
 
@@ -66,9 +74,20 @@ async def list_chats() -> list[dict]:
         return resp.json()
 
 
-async def create_chat(model: str | None = None) -> dict:
+async def create_chat(
+    title: str | None = None,
+    workflow_id: str | None = None,
+    workflow_settings: dict | None = None,
+) -> dict:
     async with _client(10) as client:
-        resp = await client.post("/chats", json={"model": model})
+        resp = await client.post(
+            "/chats",
+            json={
+                "title": title,
+                "workflow_id": workflow_id,
+                "workflow_settings": workflow_settings or {},
+            },
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -76,6 +95,28 @@ async def create_chat(model: str | None = None) -> dict:
 async def get_chat(chat_id: str) -> dict:
     async with _client(10) as client:
         resp = await client.get(f"/chats/{chat_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def update_chat(
+    chat_id: str,
+    workflow_id: str | None = None,
+    workflow_settings: dict | None = None,
+) -> dict:
+    """Update a chat's workflow and/or settings.
+
+    ``workflow_id`` is only accepted server-side while the chat has no
+    messages yet; pass it together with fresh ``workflow_settings`` for the
+    new workflow's schema.
+    """
+    payload: dict = {}
+    if workflow_id is not None:
+        payload["workflow_id"] = workflow_id
+    if workflow_settings is not None:
+        payload["workflow_settings"] = workflow_settings
+    async with _client(10) as client:
+        resp = await client.patch(f"/chats/{chat_id}", json=payload)
         resp.raise_for_status()
         return resp.json()
 
@@ -89,26 +130,18 @@ async def delete_chat(chat_id: str) -> None:
 async def stream_message(
     chat_id: str,
     content: str,
-    model: str,
-    temperature: float,
-    system_prompt: str | None,
-    tools: list[dict] | None,
     on_delta: Callable[[str], None],
     on_tool_call: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
 ) -> dict:
     """Stream a message reply, calling ``on_delta`` per chunk.
 
+    Model/temperature/system prompt/tools all come from the chat's workflow
+    settings server-side now, so the request only carries the new content.
     Returns the full updated chat (from the final ``done`` event). Raises on a
     provider error (surfaced as an ``error`` event) or an HTTP error.
     """
-    payload = {
-        "content": content,
-        "model": model,
-        "temperature": temperature,
-        "system_prompt": system_prompt,
-        "tools": tools,
-    }
+    payload = {"content": content}
     final_chat: dict | None = None
     async with _client(300) as client:
         async with client.stream(

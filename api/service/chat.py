@@ -1,4 +1,10 @@
-"""Central chat logic used by the chat routes."""
+"""Central chat logic used by the chat routes.
+
+This module owns the wire protocol (NDJSON events) and persistence, which are
+the same regardless of which workflow is running. The workflow itself (looked
+up from the chat) owns the model settings and the actual loop — see
+``api.workflows``.
+"""
 
 from __future__ import annotations
 
@@ -7,55 +13,26 @@ from collections.abc import AsyncIterator
 
 from openai import APIConnectionError
 
-from ..providers import StreamComplete, TextDelta, ToolCallEvent, ToolResultEvent, get_client
+from ..providers import StreamComplete, TextDelta, ToolCallEvent, ToolResultEvent
 from ..schemas import Message, SendMessageRequest
 from ..store import get_store
-from ..tools import DEFAULT_TOOLS
-
-
-def _history_for_model(messages: list[Message]) -> list[Message]:
-    """Build provider context without replaying historical tool-use entries.
-
-    We keep tool calls/results in persisted chat history for observability, but
-    avoid resending them on later turns to reduce prompt bloat.
-    """
-    sanitized: list[Message] = []
-    for message in messages:
-        if message.role == "tool":
-            continue
-        if message.role == "assistant" and message.tool_calls:
-            if message.content:
-                # Keep any visible assistant text, but strip tool-call metadata.
-                sanitized.append(Message(role="assistant", content=message.content))
-            continue
-        sanitized.append(message)
-    return sanitized
+from ..workflows import WorkflowContext, get_workflow
 
 
 async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIterator[str]:
-    """Handle chat message submission and streaming the assistant response."""
+    """Handle chat message submission and stream the assistant response."""
     store = get_store()
     chat = store.get(chat_id)
     if chat is None:
         raise KeyError(chat_id)
 
+    workflow = get_workflow(chat.workflow_id)
     user_msg = Message(role="user", content=req.content)
-    conversation: list[Message] = []
-    if req.system_prompt:
-        conversation.append(Message(role="system", content=req.system_prompt))
-    conversation.extend(_history_for_model(chat.messages))
-    conversation.append(user_msg)
-    client = get_client()
-    tools = req.tools if req.tools is not None else DEFAULT_TOOLS
+    ctx = WorkflowContext(chat=chat, user_message=user_msg)
 
     produced: list[Message] = []
     try:
-        async for event in client.chat_stream(
-            model=req.model,
-            messages=conversation,
-            temperature=req.temperature,
-            tools=tools,
-        ):
+        async for event in workflow.run(ctx):
             if isinstance(event, TextDelta):
                 yield json.dumps({"type": "delta", "content": event.content}) + "\n"
             elif isinstance(event, ToolCallEvent):
@@ -83,8 +60,7 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
             elif isinstance(event, StreamComplete):
                 produced = event.messages
     except APIConnectionError as exc:
-        detail = f"Could not reach provider at {client.config.base_url}: {exc}"
-        yield json.dumps({"type": "error", "detail": detail}) + "\n"
+        yield json.dumps({"type": "error", "detail": f"Could not reach provider: {exc}"}) + "\n"
         return
     except Exception as exc:  # noqa: BLE001 — any provider error mid-stream
         yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
@@ -93,6 +69,5 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
     store.add_message(chat_id, user_msg)
     for message in produced:
         store.add_message(chat_id, message)
-    store.set_model(chat_id, req.model)
     updated = store.get(chat_id)
     yield json.dumps({"type": "done", "chat": updated.model_dump(mode="json")}) + "\n"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,20 @@ class ProviderInfo(BaseModel):
     base_url: str
 
 
+class WorkflowInfo(BaseModel):
+    """Describes a registered workflow and the settings it accepts.
+
+    ``settings_schema`` is the JSON Schema of the workflow's settings model
+    (see ``api.workflows.base.Workflow``) — the UI renders a form from it
+    rather than hard-coding inputs per workflow.
+    """
+
+    id: str
+    name: str
+    description: str
+    settings_schema: dict[str, Any]
+
+
 # --- Stored chats ----------------------------------------------------------
 
 
@@ -49,7 +63,8 @@ class Chat(BaseModel):
 
     id: str
     title: str
-    model: str | None = None
+    workflow_id: str = "simple_chat"
+    workflow_settings: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     messages: list[Message] = Field(default_factory=list)
@@ -60,7 +75,7 @@ class ChatSummary(BaseModel):
 
     id: str
     title: str
-    model: str | None = None
+    workflow_id: str
     created_at: datetime
     updated_at: datetime
     message_count: int
@@ -68,7 +83,23 @@ class ChatSummary(BaseModel):
 
 class CreateChatRequest(BaseModel):
     title: str | None = None
-    model: str | None = None
+    workflow_id: str
+    workflow_settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdateChatRequest(BaseModel):
+    """Partial update for an existing chat.
+
+    ``workflow_id`` can only change while the chat has no messages yet (the
+    UI locks that control after the first send). ``workflow_settings`` can be
+    updated at any time and takes effect on the chat's next turn. When both
+    are provided, ``workflow_settings`` is validated against the *new*
+    workflow — the caller must supply settings that satisfy that workflow's
+    schema, not the old one's.
+    """
+
+    workflow_id: str | None = None
+    workflow_settings: dict[str, Any] | None = None
 
 
 class Project(BaseModel):
@@ -83,8 +114,7 @@ class CreateProjectRequest(BaseModel):
 
 
 class SendMessageRequest(BaseModel):
+    """A new user turn. Model/temperature/system prompt/tools all live on the
+    chat's workflow settings now, not per-message."""
+
     content: str
-    model: str
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    system_prompt: str | None = None
-    tools: list[dict] | None = None

@@ -1,23 +1,27 @@
 """NiceGUI chat interface.
 
 Full-screen layout:
-  * left sidebar  — model selector, temperature, and the list of stored chats
+  * left sidebar  — projects and the list of stored chats
+  * right sidebar — the loaded chat's workflow settings, rendered live from
+    the workflow's schema and editable at any time; the workflow choice
+    itself locks once the chat has a first message (see ``update_chat``)
   * center        — scrolling chat history
   * bottom        — input box + send button
 
-Chats are persisted server-side (see ``api/store.py``). The UI remembers the
-current chat id in browser storage, so a refresh reloads the full conversation
-from the backend.
+Chats are persisted server-side (see ``api/store.py``), each pinned to a
+workflow (see ``api/workflows``) that owns its model settings and chat loop.
+The UI remembers the current chat id in browser storage, so a refresh reloads
+the full conversation from the backend.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 import httpx
 from nicegui import app, ui
-
-from api.tools import DEFAULT_TOOLS
 
 from . import client
 
@@ -76,13 +80,138 @@ def _assistant_tool_report(message: dict) -> str:
     return "\n\n".join(lines)
 
 
+def _default_settings(schema: dict, models: list[str]) -> dict:
+    """Best-effort default value per field, for creating a chat or switching
+    a chat to a workflow it's never used before (no persisted values yet)."""
+    settings: dict = {}
+    for field_name, field_schema in schema.get("properties", {}).items():
+        if "default" in field_schema:
+            settings[field_name] = field_schema["default"]
+        elif field_schema.get("widget") == "model_select":
+            settings[field_name] = models[0] if models else ""
+        elif field_schema.get("type") == "boolean":
+            settings[field_name] = False
+        elif field_schema.get("type") in ("integer", "number"):
+            settings[field_name] = 0
+        else:
+            settings[field_name] = ""
+    return settings
+
+
+def _render_settings_field(
+    field_name: str,
+    field_schema: dict,
+    models: list[str],
+    value: Any,
+    on_change: Callable[[], None] | None,
+) -> Callable[[], Any]:
+    """Render one input for a workflow settings field; return a getter for its value.
+
+    The widget is picked from the field's JSON Schema shape (type / enum),
+    with an optional ``widget`` hint (set via ``Field(json_schema_extra=...)``
+    on the workflow's settings model) overriding the default — e.g. a plain
+    string field renders as a single-line input unless it's hinted
+    "textarea", and "model_select" binds to the live model list rather than
+    free text. ``on_change`` (if given) is wired to fire whenever the field's
+    value settles — immediately for discrete choices (select/checkbox/
+    number), on blur for free text, so it isn't fired on every keystroke.
+    """
+    label = field_schema.get("title") or field_name.replace("_", " ").title()
+    description = field_schema.get("description")
+    widget = field_schema.get("widget")
+
+    if widget == "model_select":
+        select = ui.select(options=models, value=value, label=label, with_input=True).classes(
+            "w-full"
+        )
+        if description:
+            select.tooltip(description)
+        if on_change:
+            select.on_value_change(on_change)
+        return lambda: select.value
+
+    if "enum" in field_schema:
+        select = ui.select(options=field_schema["enum"], value=value, label=label).classes(
+            "w-full"
+        )
+        if on_change:
+            select.on_value_change(on_change)
+        return lambda: select.value
+
+    field_type = field_schema.get("type")
+
+    if field_type == "boolean":
+        checkbox = ui.checkbox(label, value=bool(value))
+        if on_change:
+            checkbox.on_value_change(on_change)
+        return lambda: checkbox.value
+
+    if field_type in ("integer", "number"):
+        number = ui.number(
+            label,
+            value=value if value is not None else 0,
+            min=field_schema.get("minimum"),
+            max=field_schema.get("maximum"),
+        ).classes("w-full")
+        if on_change:
+            number.on_value_change(on_change)
+        return lambda: number.value
+
+    if widget == "textarea":
+        area = (
+            ui.textarea(label, value=value or "", placeholder=description)
+            .classes("w-full")
+            .props("outlined autogrow dense")
+        )
+        if on_change:
+            area.on("blur", on_change)
+        return lambda: area.value
+
+    text_field = ui.input(label, value=value or "", placeholder=description).classes("w-full")
+    if on_change:
+        text_field.on("blur", on_change)
+    return lambda: text_field.value
+
+
+def _render_settings_form(
+    schema: dict,
+    models: list[str],
+    values: dict,
+    on_change: Callable[[], None] | None = None,
+) -> dict[str, Callable[[], Any]]:
+    """Render inputs for every field in a workflow's settings schema, seeded
+    from ``values`` (falling back to each field's schema default).
+
+    Must be called inside a ``with <container>:`` block so the widgets attach
+    to the right place. Returns one value-getter per field name.
+    """
+    return {
+        field_name: _render_settings_field(
+            field_name,
+            field_schema,
+            models,
+            values.get(field_name, field_schema.get("default")),
+            on_change,
+        )
+        for field_name, field_schema in schema.get("properties", {}).items()
+    }
+
+
 def register_pages() -> None:
     @ui.page("/")
     async def chat_page() -> None:
         # Rendered conversation (mirror of the server-side chat) and the id of
         # the chat currently open.
         history: list[dict] = []
-        state: dict = {"chat_id": None, "project_id": None, "context_lengths": {}}
+        workflows: list[dict] = []
+        state: dict = {
+            "chat_id": None,
+            "project_id": None,
+            "context_lengths": {},
+            "models": [],
+            "workflow_id": None,
+            "workflow_settings": {},
+        }
 
         def _stored_chat_id() -> str | None:
             try:
@@ -144,7 +273,7 @@ def register_pages() -> None:
                 )
             chat_list = ui.column().classes("w-full gap-1")
 
-        # --- Right sidebar: model settings -------------------------------
+        # --- Right sidebar: workflow settings ------------------------------
         with ui.right_drawer(bordered=True).classes("bg-gray-50").props("width=280"):
 
             async def refresh_models() -> None:
@@ -157,31 +286,21 @@ def register_pages() -> None:
                         multi_line=True,
                     )
                     return
-                models = data.get("models", [])
+                state["models"] = data.get("models", [])
                 state["context_lengths"] = data.get("context_lengths", {})
-                model_select.options = models
-                if models and model_select.value not in models:
-                    model_select.value = models[0]
-                model_select.update()
                 update_context_usage()
 
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label("Model").classes("text-sm font-medium text-gray-600")
-                ui.button(icon="refresh", on_click=refresh_models).props(
+                ui.label("Workflow").classes("text-sm font-medium text-gray-600")
+                ui.button(icon="refresh", on_click=lambda: refresh_model_options()).props(
                     "flat dense round size=sm"
                 ).tooltip("Refresh models")
-            model_select = ui.select(
-                options=[], with_input=True, label="Select a model"
-            ).classes("w-full")
+            # Locked once the chat has a first message (see PATCH /chats/{id});
+            # the fields below it stay editable for the life of the chat.
+            workflow_select = ui.select(options={}, label="Workflow").classes("w-full")
+            settings_container = ui.column().classes("w-full gap-2 mt-1")
 
-            temperature = ui.number(
-                "Temperature", value=0.7, min=0, max=2, step=0.1, format="%.1f"
-            ).classes("w-full")
-            system_prompt = (
-                ui.textarea("System prompt", placeholder="Optional instructions for the assistant")
-                .classes("w-full")
-                .props("outlined autogrow dense")
-            )
+            ui.separator().classes("w-full my-2")
 
             # --- Context window ------------------------------------------
             ui.label("Context").classes("text-sm font-medium text-gray-600")
@@ -189,6 +308,77 @@ def register_pages() -> None:
                 "rounded"
             ).classes("w-full")
             usage_label = ui.label("").classes("text-xs text-gray-500")
+
+        settings_getters: dict = {}
+
+        async def save_settings() -> None:
+            if not state["chat_id"]:
+                return
+            settings = {name: getter() for name, getter in settings_getters.items()}
+            try:
+                updated = await client.update_chat(state["chat_id"], workflow_settings=settings)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not save settings: {_error_detail(exc)}", type="negative")
+                return
+            state["workflow_settings"] = updated.get("workflow_settings") or {}
+            update_context_usage()
+
+        def render_workflow_settings() -> None:
+            """(Re)build the settings fields for the loaded chat's workflow,
+            seeded from its currently persisted values."""
+            nonlocal settings_getters
+            settings_container.clear()
+            info = next((w for w in workflows if w["id"] == state.get("workflow_id")), None)
+            if info is None:
+                settings_getters = {}
+                return
+            with settings_container:
+                settings_getters = _render_settings_form(
+                    info["settings_schema"],
+                    state["models"],
+                    state.get("workflow_settings") or {},
+                    on_change=save_settings,
+                )
+
+        async def refresh_model_options() -> None:
+            await refresh_models()
+            if state["chat_id"]:
+                render_workflow_settings()
+
+        async def on_workflow_change() -> None:
+            new_workflow_id = workflow_select.value
+            if not state["chat_id"] or new_workflow_id == state.get("workflow_id"):
+                return
+            info = next((w for w in workflows if w["id"] == new_workflow_id), None)
+            if info is None:
+                return
+            defaults = _default_settings(info["settings_schema"], state["models"])
+            try:
+                updated = await client.update_chat(
+                    state["chat_id"], workflow_id=new_workflow_id, workflow_settings=defaults
+                )
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not switch workflow: {_error_detail(exc)}", type="negative")
+                workflow_select.value = state.get("workflow_id")
+                return
+            state["workflow_id"] = updated.get("workflow_id")
+            state["workflow_settings"] = updated.get("workflow_settings") or {}
+            render_workflow_settings()
+            update_context_usage()
+
+        workflow_select.on_value_change(on_workflow_change)
+
+        def apply_chat_to_sidebar() -> None:
+            """Sync the workflow select + settings form to ``state`` — call
+            after loading, creating, or clearing the current chat."""
+            workflow_select.options = {w["id"]: w["name"] for w in workflows}
+            workflow_select.value = state.get("workflow_id")
+            workflow_select.update()
+            if state["chat_id"] and not history:
+                workflow_select.enable()
+            else:
+                workflow_select.disable()
+            render_workflow_settings()
 
         # --- Context usage -----------------------------------------------
         def _estimate_tokens(text: str) -> int:
@@ -198,12 +388,15 @@ def register_pages() -> None:
             return (len(text) + 3) // 4 if text else 0
 
         def _selected_context_length() -> int | None:
-            return state["context_lengths"].get(model_select.value)
+            model = (state.get("workflow_settings") or {}).get("model")
+            return state["context_lengths"].get(model) if model else None
 
         def _conversation_tokens() -> int:
-            """Estimated tokens the next request will carry: system prompt +
-            stored history + whatever is currently typed in the input box."""
-            total = _estimate_tokens((system_prompt.value or "").strip())
+            """Estimated tokens the next request will carry: the workflow's
+            system prompt (if it has one) + stored history + whatever is
+            currently typed in the input box."""
+            system_prompt = (state.get("workflow_settings") or {}).get("system_prompt", "")
+            total = _estimate_tokens((system_prompt or "").strip())
             for msg in history:
                 total += _estimate_tokens(msg.get("content", ""))
             total += _estimate_tokens((text_input.value or "").strip())
@@ -226,9 +419,6 @@ def register_pages() -> None:
                 usage_bar.set_visibility(False)
                 usage_label.text = f"≈ {used:,} tokens"
                 usage_label.classes(replace="text-xs text-gray-500")
-
-        model_select.on_value_change(lambda: update_context_usage())
-        system_prompt.on_value_change(lambda: update_context_usage())
 
         # --- Center: chat history ----------------------------------------
         messages_area = ui.scroll_area().classes("w-full flex-grow min-h-0")
@@ -341,9 +531,12 @@ def register_pages() -> None:
             messages_col.clear()
             with messages_col:
                 if not history:
-                    ui.label("Start the conversation below.").classes(
-                        "text-gray-400 text-center w-full mt-8"
+                    placeholder = (
+                        "Start the conversation below."
+                        if state["chat_id"]
+                        else 'No chat selected — click "+" next to Chats to create one.'
                     )
+                    ui.label(placeholder).classes("text-gray-400 text-center w-full mt-8")
                 for msg in history:
                     is_user = msg["role"] == "user"
                     if msg["role"] == "tool":
@@ -413,17 +606,44 @@ def register_pages() -> None:
         async def load_chat(chat_id: str) -> None:
             chat = await client.get_chat(chat_id)
             state["chat_id"] = chat["id"]
+            state["workflow_id"] = chat.get("workflow_id")
+            state["workflow_settings"] = chat.get("workflow_settings") or {}
             _store_chat_id(chat["id"])
-            if chat.get("model") and chat["model"] in model_select.options:
-                model_select.value = chat["model"]
             set_history(chat["messages"])
+            apply_chat_to_sidebar()
+
+        def clear_chat() -> None:
+            """Drop back to the no-chat-selected state (e.g. after deleting the
+            last chat)."""
+            state["chat_id"] = None
+            state["workflow_id"] = None
+            state["workflow_settings"] = {}
+            _store_chat_id(None)
+            set_history([])
+            apply_chat_to_sidebar()
 
         async def open_chat(chat_id: str) -> None:
             await load_chat(chat_id)
             await render_chat_list()
 
         async def new_chat() -> None:
-            chat = await client.create_chat(model=model_select.value)
+            await refresh_models()
+            if not workflows:
+                ui.notify("No workflows available.", type="negative")
+                return
+            workflow = workflows[0]
+            defaults = _default_settings(workflow["settings_schema"], state["models"])
+            try:
+                chat = await client.create_chat(
+                    workflow_id=workflow["id"], workflow_settings=defaults
+                )
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(
+                    f"Could not create chat: {_error_detail(exc)}",
+                    type="negative",
+                    multi_line=True,
+                )
+                return
             await load_chat(chat["id"])
             await render_chat_list()
 
@@ -438,8 +658,7 @@ def register_pages() -> None:
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:
-                    fresh = await client.create_chat(model=model_select.value)
-                    await load_chat(fresh["id"])
+                    clear_chat()
             await render_chat_list()
 
         # --- Bottom: input -----------------------------------------------
@@ -457,13 +676,9 @@ def register_pages() -> None:
             content = (text_input.value or "").strip()
             if not content:
                 return
-            if not model_select.value:
-                ui.notify("Select a model first.", type="warning")
-                return
             if not state["chat_id"]:
-                chat = await client.create_chat(model=model_select.value)
-                state["chat_id"] = chat["id"]
-                _store_chat_id(chat["id"])
+                ui.notify("Create a chat first.", type="warning")
+                return
 
             text_input.value = ""
             # Optimistically show the user's message.
@@ -471,6 +686,9 @@ def register_pages() -> None:
             render_history()
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
+            # This is the chat's first message — lock the workflow choice
+            # immediately rather than waiting for the round trip to finish.
+            apply_chat_to_sidebar()
 
             # Streaming render state. A fresh "Assistant" bubble (with its own
             # spinner) is opened whenever the model still owes us output —
@@ -534,10 +752,6 @@ def register_pages() -> None:
                 updated = await client.stream_message(
                     state["chat_id"],
                     content,
-                    model_select.value,
-                    float(temperature.value or 0.7),
-                    (system_prompt.value or "").strip() or None,
-                    DEFAULT_TOOLS,
                     on_delta,
                     on_tool_call,
                     on_tool_result,
@@ -557,6 +771,9 @@ def register_pages() -> None:
                 if history and history[-1]["role"] == "user":
                     history.pop()  # roll back the optimistic message
                 render_history()
+                # If that was a failed first message, the workflow choice is
+                # still open — undo the lock from the optimistic append above.
+                apply_chat_to_sidebar()
 
         send_button.on("click", send)
         text_input.on("keydown.enter", send)
@@ -570,9 +787,15 @@ def register_pages() -> None:
             except Exception:  # noqa: BLE001
                 provider_label.text = "provider unavailable"
             await refresh_models()
+            try:
+                workflows[:] = await client.get_workflows()
+            except Exception:  # noqa: BLE001
+                workflows[:] = []
 
-            # Restore the current chat across refreshes; otherwise open the most
-            # recent, or create a fresh one.
+            # Restore the current chat across refreshes; otherwise open the
+            # most recent one. If there's none at all, leave the empty state —
+            # creating one now means picking a workflow (see the "new chat"
+            # dialog), so there's nothing sensible to auto-create.
             loaded = False
             stored_id = _stored_chat_id()
             if stored_id:
@@ -586,8 +809,7 @@ def register_pages() -> None:
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:
-                    fresh = await client.create_chat(model=model_select.value)
-                    await load_chat(fresh["id"])
+                    clear_chat()
             await render_chat_list()
 
         # NiceGUI must send the page within ~3s; defer slow provider/chat IO.
