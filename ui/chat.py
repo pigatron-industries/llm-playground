@@ -80,15 +80,26 @@ def _assistant_tool_report(message: dict) -> str:
     return "\n\n".join(lines)
 
 
-def _default_settings(schema: dict, models: list[str]) -> dict:
+def _default_settings(
+    schema: dict,
+    models: list[str],
+    projects: list[dict] | None = None,
+    selected_project_id: str | None = None,
+) -> dict:
     """Best-effort default value per field, for creating a chat or switching
     a chat to a workflow it's never used before (no persisted values yet)."""
+    projects = projects or []
     settings: dict = {}
     for field_name, field_schema in schema.get("properties", {}).items():
+        widget = field_schema.get("widget")
         if "default" in field_schema:
             settings[field_name] = field_schema["default"]
-        elif field_schema.get("widget") == "model_select":
+        elif widget == "model_select":
             settings[field_name] = models[0] if models else ""
+        elif widget == "project_select":
+            settings[field_name] = selected_project_id or (
+                projects[0]["id"] if projects else ""
+            )
         elif field_schema.get("type") == "boolean":
             settings[field_name] = False
         elif field_schema.get("type") in ("integer", "number"):
@@ -102,6 +113,7 @@ def _render_settings_field(
     field_name: str,
     field_schema: dict,
     models: list[str],
+    projects: list[dict],
     value: Any,
     on_change: Callable[[], None] | None,
 ) -> Callable[[], Any]:
@@ -111,10 +123,12 @@ def _render_settings_field(
     with an optional ``widget`` hint (set via ``Field(json_schema_extra=...)``
     on the workflow's settings model) overriding the default — e.g. a plain
     string field renders as a single-line input unless it's hinted
-    "textarea", and "model_select" binds to the live model list rather than
-    free text. ``on_change`` (if given) is wired to fire whenever the field's
-    value settles — immediately for discrete choices (select/checkbox/
-    number), on blur for free text, so it isn't fired on every keystroke.
+    "textarea", "model_select" binds to the live model list, and
+    "project_select" binds to the project list from the left sidebar, rather
+    than free text. ``on_change`` (if given) is wired to fire whenever the
+    field's value settles — immediately for discrete choices (select/
+    checkbox/number), on blur for free text, so it isn't fired on every
+    keystroke.
     """
     label = field_schema.get("title") or field_name.replace("_", " ").title()
     description = field_schema.get("description")
@@ -124,6 +138,15 @@ def _render_settings_field(
         select = ui.select(options=models, value=value, label=label, with_input=True).classes(
             "w-full"
         )
+        if description:
+            select.tooltip(description)
+        if on_change:
+            select.on_value_change(on_change)
+        return lambda: select.value
+
+    if widget == "project_select":
+        options = {p["id"]: p["name"] for p in projects}
+        select = ui.select(options=options, value=value, label=label).classes("w-full")
         if description:
             select.tooltip(description)
         if on_change:
@@ -176,6 +199,7 @@ def _render_settings_field(
 def _render_settings_form(
     schema: dict,
     models: list[str],
+    projects: list[dict],
     values: dict,
     on_change: Callable[[], None] | None = None,
 ) -> dict[str, Callable[[], Any]]:
@@ -190,6 +214,7 @@ def _render_settings_form(
             field_name,
             field_schema,
             models,
+            projects,
             values.get(field_name, field_schema.get("default")),
             on_change,
         )
@@ -211,6 +236,7 @@ def register_pages() -> None:
             "models": [],
             "workflow_id": None,
             "workflow_settings": {},
+            "extra_context_chars": 0,
         }
 
         def _stored_chat_id() -> str | None:
@@ -321,7 +347,7 @@ def register_pages() -> None:
                 ui.notify(f"Could not save settings: {_error_detail(exc)}", type="negative")
                 return
             state["workflow_settings"] = updated.get("workflow_settings") or {}
-            update_context_usage()
+            await refresh_context_estimate()
 
         def render_workflow_settings() -> None:
             """(Re)build the settings fields for the loaded chat's workflow,
@@ -336,6 +362,7 @@ def register_pages() -> None:
                 settings_getters = _render_settings_form(
                     info["settings_schema"],
                     state["models"],
+                    _real_projects(),
                     state.get("workflow_settings") or {},
                     on_change=save_settings,
                 )
@@ -352,7 +379,9 @@ def register_pages() -> None:
             info = next((w for w in workflows if w["id"] == new_workflow_id), None)
             if info is None:
                 return
-            defaults = _default_settings(info["settings_schema"], state["models"])
+            defaults = _default_settings(
+                info["settings_schema"], state["models"], _real_projects(), state["project_id"]
+            )
             try:
                 updated = await client.update_chat(
                     state["chat_id"], workflow_id=new_workflow_id, workflow_settings=defaults
@@ -364,7 +393,7 @@ def register_pages() -> None:
             state["workflow_id"] = updated.get("workflow_id")
             state["workflow_settings"] = updated.get("workflow_settings") or {}
             render_workflow_settings()
-            update_context_usage()
+            await refresh_context_estimate()
 
         workflow_select.on_value_change(on_workflow_change)
 
@@ -381,22 +410,39 @@ def register_pages() -> None:
             render_workflow_settings()
 
         # --- Context usage -----------------------------------------------
-        def _estimate_tokens(text: str) -> int:
+        def _chars_to_tokens(chars: int) -> int:
             # Rough heuristic (~4 chars/token). Exact tokenisation is
             # model-specific, but this is close enough to gauge how full the
             # context window is — hence the "≈" in the display.
-            return (len(text) + 3) // 4 if text else 0
+            return (chars + 3) // 4 if chars else 0
+
+        def _estimate_tokens(text: str) -> int:
+            return _chars_to_tokens(len(text)) if text else 0
 
         def _selected_context_length() -> int | None:
             model = (state.get("workflow_settings") or {}).get("model")
             return state["context_lengths"].get(model) if model else None
 
+        async def refresh_context_estimate() -> None:
+            """Fetch the current workflow's extra-context size (system
+            prompt, injected project files, ...) — each workflow computes
+            this its own way (see ``Workflow.extra_context_chars``), so the
+            UI can't derive it generically from ``workflow_settings``."""
+            if not state["chat_id"]:
+                state["extra_context_chars"] = 0
+                return
+            try:
+                data = await client.get_context_estimate(state["chat_id"])
+            except Exception:  # noqa: BLE001 — best-effort; leave prior estimate
+                return
+            state["extra_context_chars"] = data.get("extra_context_chars", 0)
+            update_context_usage()
+
         def _conversation_tokens() -> int:
             """Estimated tokens the next request will carry: the workflow's
-            system prompt (if it has one) + stored history + whatever is
-            currently typed in the input box."""
-            system_prompt = (state.get("workflow_settings") or {}).get("system_prompt", "")
-            total = _estimate_tokens((system_prompt or "").strip())
+            extra context (last fetched via ``refresh_context_estimate``) +
+            stored history + whatever is currently typed in the input box."""
+            total = _chars_to_tokens(state.get("extra_context_chars", 0))
             for msg in history:
                 total += _estimate_tokens(msg.get("content", ""))
             total += _estimate_tokens((text_input.value or "").strip())
@@ -426,6 +472,12 @@ def register_pages() -> None:
             messages_col = ui.column().classes("w-full max-w-5xl mx-auto gap-2 p-4")
 
         projects: list[dict[str, str]] = []
+
+        def _real_projects() -> list[dict[str, str]]:
+            """``projects`` includes a synthetic "No project" placeholder
+            (id=None) for the sidebar list; workflow settings forms only want
+            the actual projects."""
+            return [p for p in projects if p.get("id")]
 
         async def load_projects() -> None:
             try:
@@ -611,6 +663,7 @@ def register_pages() -> None:
             _store_chat_id(chat["id"])
             set_history(chat["messages"])
             apply_chat_to_sidebar()
+            await refresh_context_estimate()
 
         def clear_chat() -> None:
             """Drop back to the no-chat-selected state (e.g. after deleting the
@@ -618,6 +671,7 @@ def register_pages() -> None:
             state["chat_id"] = None
             state["workflow_id"] = None
             state["workflow_settings"] = {}
+            state["extra_context_chars"] = 0
             _store_chat_id(None)
             set_history([])
             apply_chat_to_sidebar()
@@ -631,8 +685,17 @@ def register_pages() -> None:
             if not workflows:
                 ui.notify("No workflows available.", type="negative")
                 return
-            workflow = workflows[0]
-            defaults = _default_settings(workflow["settings_schema"], state["models"])
+            # A project selected in the left sidebar implies you want it as
+            # context, so default to that workflow rather than a plain chat.
+            default_id = (
+                "project_context"
+                if state["project_id"] and any(w["id"] == "project_context" for w in workflows)
+                else workflows[0]["id"]
+            )
+            workflow = next(w for w in workflows if w["id"] == default_id)
+            defaults = _default_settings(
+                workflow["settings_schema"], state["models"], _real_projects(), state["project_id"]
+            )
             try:
                 chat = await client.create_chat(
                     workflow_id=workflow["id"], workflow_settings=defaults

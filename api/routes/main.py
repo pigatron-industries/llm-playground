@@ -14,6 +14,7 @@ from ..providers import get_client
 from ..schemas import (
     Chat,
     ChatSummary,
+    ContextEstimate,
     CreateChatRequest,
     CreateProjectRequest,
     Message,
@@ -154,6 +155,22 @@ def get_chat(chat_id: str) -> Chat:
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
     return chat
+
+
+@router.get("/chats/{chat_id}/context_estimate", response_model=ContextEstimate)
+def get_context_estimate(chat_id: str) -> ContextEstimate:
+    """Estimated size of whatever extra context the chat's workflow injects
+    (system prompt, project files, ...) — for the UI's context-usage bar.
+    Best-effort: any failure just reports 0 rather than breaking the chat."""
+    chat = get_store().get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    try:
+        workflow = get_workflow(chat.workflow_id)
+        chars = workflow.extra_context_chars(chat)
+    except Exception:  # noqa: BLE001
+        chars = 0
+    return ContextEstimate(extra_context_chars=chars)
 
 
 @router.delete("/chats/{chat_id}", status_code=204)

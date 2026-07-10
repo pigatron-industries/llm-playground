@@ -99,6 +99,15 @@ async def get_chat(chat_id: str) -> dict:
         return resp.json()
 
 
+async def get_context_estimate(chat_id: str) -> dict:
+    """Return ``{"extra_context_chars": int}`` — the chat's workflow's
+    best-effort estimate of extra context beyond the visible history."""
+    async with _client(10) as client:
+        resp = await client.get(f"/chats/{chat_id}/context_estimate")
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def update_chat(
     chat_id: str,
     workflow_id: str | None = None,

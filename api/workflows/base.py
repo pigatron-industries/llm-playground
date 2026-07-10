@@ -47,3 +47,11 @@ class Workflow(ABC):
     def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         """Yield chat events for this turn; the final event must be a StreamComplete."""
         raise NotImplementedError
+
+    def extra_context_chars(self, chat: Chat) -> int:
+        """Best-effort character count of context this workflow injects beyond
+        the visible chat history — a system prompt, injected file contents,
+        etc. Used only for the UI's context-window usage estimate, so an
+        approximation (or 0, the default for workflows with nothing extra)
+        is fine; never raise here."""
+        return 0

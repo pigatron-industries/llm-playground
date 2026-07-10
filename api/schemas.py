@@ -118,3 +118,11 @@ class SendMessageRequest(BaseModel):
     chat's workflow settings now, not per-message."""
 
     content: str
+
+
+class ContextEstimate(BaseModel):
+    """Best-effort size of the extra context (system prompt, injected files,
+    ...) a workflow adds beyond the visible chat history — see
+    ``api.workflows.base.Workflow.extra_context_chars``."""
+
+    extra_context_chars: int

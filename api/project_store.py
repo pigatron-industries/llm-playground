@@ -44,6 +44,9 @@ class ProjectStore:
     def list(self) -> list[Project]:
         return self._read()
 
+    def get(self, project_id: str) -> Project | None:
+        return next((p for p in self._read() if p.id == project_id), None)
+
     def create(self, name: str, path: str) -> Project:
         project = Project(id=uuid.uuid4().hex, name=name, path=path)
         projects = self._read()
