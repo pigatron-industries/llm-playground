@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
+from . import math as _math  # noqa: F401 - imported for registration side effects
+from .registry import execute_registered_tool, get_tool_metadata
 
-from .math import ADD_NUMBERS_TOOL, add_numbers
+DEFAULT_TOOLS = get_tool_metadata()
 
-DEFAULT_TOOLS = [ADD_NUMBERS_TOOL]
-
-__all__ = ["ADD_NUMBERS_TOOL", "DEFAULT_TOOLS", "execute_tool"]
+__all__ = ["DEFAULT_TOOLS", "execute_tool"]
 
 
 def execute_tool(name: str, arguments: dict) -> str:
-    if name == "add_numbers":
-        return add_numbers(arguments["a"], arguments["b"])
-    return json.dumps({"error": f"Unknown tool: {name}"})
+    return execute_registered_tool(name, arguments)
