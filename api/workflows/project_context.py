@@ -24,11 +24,11 @@ _MAX_CONTEXT_CHARS = 200_000
 class ProjectContextSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: str = Field(json_schema_extra={"widget": "model_select"})
     project_id: str = Field(
         description="Project whose files are read into context on every turn",
         json_schema_extra={"widget": "project_select"},
     )
+    model: str = Field(json_schema_extra={"widget": "model_select"})
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
@@ -91,7 +91,7 @@ class ProjectContextWorkflow(Workflow):
             model=settings.model,
             messages=conversation,
             temperature=settings.temperature,
-            tools=get_tools(include_file_tools=True),
+            tools=get_tools(include_file_tools=False),
         ):
             yield event
 
