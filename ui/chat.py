@@ -690,7 +690,7 @@ def register_pages() -> None:
             default_id = (
                 "project_context"
                 if state["project_id"] and any(w["id"] == "project_context" for w in workflows)
-                else workflows[0]["id"]
+                else "simple_chat"
             )
             workflow = next(w for w in workflows if w["id"] == default_id)
             defaults = _default_settings(
