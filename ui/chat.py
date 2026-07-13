@@ -66,18 +66,18 @@ def _message_bubble(name: str, is_user: bool, timestamp: str | None = None):
     return bubble
 
 
-def _assistant_tool_report(message: dict) -> str:
-    """Render persisted assistant tool-call metadata as markdown."""
+def _assistant_tool_report(message: dict) -> tuple[str, bool]:
+    """Render persisted assistant tool-call metadata. Returns (text, is_tool_report)."""
     calls = message.get("tool_calls") or []
     if not calls:
-        return ""
+        return ("", False)
 
     lines: list[str] = []
     for call in calls:
         name = call.get("name", "unknown_tool")
         arguments = call.get("arguments", "{}")
-        lines.append(f"**Tool call:** `{name}({arguments})`")
-    return "\n\n".join(lines)
+        lines.append(f"Tool call: {name}(\n{arguments}\n)")
+    return ("\n\n".join(lines), True)
 
 
 def _default_settings(
@@ -593,20 +593,23 @@ def register_pages() -> None:
                     is_user = msg["role"] == "user"
                     if msg["role"] == "tool":
                         with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
-                            ui.markdown(
-                                f"**Result:** `{msg.get('content', '')}`",
-                                extras=["fenced-code-blocks", "tables"],
-                            ).classes("text-gray-800 break-words max-w-full")
+                            ui.label(f"Result:\n{msg.get('content', '')}").classes(
+                                "text-gray-800 break-words max-w-full whitespace-pre-wrap"
+                            )
                         continue
 
                     if msg["role"] == "assistant":
-                        tool_report = _assistant_tool_report(msg)
+                        tool_report, is_tool = _assistant_tool_report(msg)
                         content = msg.get("content") or ""
-                        body = "\n\n".join(part for part in [tool_report, content] if part.strip())
-                        if not body.strip():
+                        body_parts = []  # List of (text, is_tool_report)
+                        if is_tool:
+                            body_parts.append((tool_report, True))
+                        if content.strip():
+                            body_parts.append((content, False))
+                        if not body_parts:
                             continue
                     else:
-                        body = msg.get("content", "")
+                        body_parts = [(msg.get("content", ""), False)]
 
                     with _message_bubble(
                         "You" if is_user else "Assistant",
@@ -615,15 +618,24 @@ def register_pages() -> None:
                     ):
                         if is_user:
                             # Keep user input verbatim (no markdown interpretation).
-                            ui.label(body).classes(
+                            ui.label(body_parts[0][0]).classes(
                                 "text-gray-800 whitespace-pre-wrap break-words"
                             )
                         else:
-                            # Render assistant replies as markdown.
-                            ui.markdown(
-                                body,
-                                extras=["fenced-code-blocks", "tables"],
-                            ).classes("text-gray-800 break-words max-w-full")
+                            # Render assistant replies. Tool reports are verbatim, content is markdown.
+                            with ui.column().classes("w-full gap-2"):
+                                for part_text, is_tool_part in body_parts:
+                                    if is_tool_part:
+                                        # Tool report - render verbatim
+                                        ui.label(part_text).classes(
+                                            "text-gray-800 whitespace-pre-wrap break-words font-mono text-sm"
+                                        )
+                                    else:
+                                        # Regular content - render as markdown
+                                        ui.markdown(
+                                            part_text,
+                                            extras=["fenced-code-blocks", "tables"],
+                                        ).classes("text-gray-800 break-words max-w-full")
 
         async def render_chat_list() -> None:
             try:
@@ -792,18 +804,17 @@ def register_pages() -> None:
 
             def on_tool_call(name: str, arguments: dict) -> None:
                 hide_spinner()
-                args_text = ", ".join(f"{key}={value}" for key, value in arguments.items())
-                live["text"] += f"**Tool call:** `{name}({args_text})`"
+                args_str = "\n".join(f"  {key}={value}" for key, value in arguments.items())
+                live["text"] += f"Tool call: {name}(\n{args_str}\n)"
                 live["md"].set_content(live["text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
                 with messages_col:
                     with _message_bubble("Tool", is_user=False):
-                        ui.markdown(
-                            f"**Result:** `{result}`",
-                            extras=["fenced-code-blocks", "tables"],
-                        ).classes("text-gray-800 break-words max-w-full")
+                        ui.label(f"Result:\n{result}").classes(
+                            "text-gray-800 break-words max-w-full whitespace-pre-wrap font-mono text-sm"
+                        )
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.

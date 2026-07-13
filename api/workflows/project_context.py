@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..project_store import get_project_store
 from ..providers import ChatEvent, get_client
 from ..schemas import Chat, Message
-from ..tools import DEFAULT_TOOLS
+from ..tools import get_tools, set_project_root
 from .base import Workflow, WorkflowContext
 from .common import history_for_model
 from .registry import register_workflow
@@ -71,6 +71,7 @@ class ProjectContextWorkflow(Workflow):
         if project is None:
             raise ValueError(f"Project '{settings.project_id}' no longer exists")
 
+        set_project_root(project.path)
         file_context = _read_project_files(Path(project.path))
 
         conversation: list[Message] = [
@@ -90,7 +91,7 @@ class ProjectContextWorkflow(Workflow):
             model=settings.model,
             messages=conversation,
             temperature=settings.temperature,
-            tools=DEFAULT_TOOLS,
+            tools=get_tools(include_file_tools=True),
         ):
             yield event
 

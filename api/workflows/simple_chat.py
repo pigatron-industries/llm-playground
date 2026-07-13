@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..providers import ChatEvent, get_client
 from ..schemas import Chat, Message
-from ..tools import DEFAULT_TOOLS
+from ..tools import get_tools
 from .base import Workflow, WorkflowContext
 from .common import history_for_model
 from .registry import register_workflow
@@ -47,7 +47,7 @@ class SimpleChatWorkflow(Workflow):
             model=settings.model,
             messages=conversation,
             temperature=settings.temperature,
-            tools=DEFAULT_TOOLS,
+            tools=get_tools(include_file_tools=False),
         ):
             yield event
 
