@@ -85,27 +85,35 @@ def _default_settings(
     models: list[str],
     projects: list[dict] | None = None,
     selected_project_id: str | None = None,
+    stored_settings: dict | None = None,
 ) -> dict:
     """Best-effort default value per field, for creating a chat or switching
-    a chat to a workflow it's never used before (no persisted values yet)."""
+    a chat to a workflow it's never used before (no persisted values yet).
+
+    Uses stored_settings if provided, falling back to schema defaults."""
     projects = projects or []
+    stored_settings = stored_settings or {}
     settings: dict = {}
     for field_name, field_schema in schema.get("properties", {}).items():
-        widget = field_schema.get("widget")
-        if "default" in field_schema:
+        # Check stored settings first
+        if field_name in stored_settings:
+            settings[field_name] = stored_settings[field_name]
+        elif "default" in field_schema:
             settings[field_name] = field_schema["default"]
-        elif widget == "model_select":
-            settings[field_name] = models[0] if models else ""
-        elif widget == "project_select":
-            settings[field_name] = selected_project_id or (
-                projects[0]["id"] if projects else ""
-            )
-        elif field_schema.get("type") == "boolean":
-            settings[field_name] = False
-        elif field_schema.get("type") in ("integer", "number"):
-            settings[field_name] = 0
         else:
-            settings[field_name] = ""
+            widget = field_schema.get("widget")
+            if widget == "model_select":
+                settings[field_name] = models[0] if models else ""
+            elif widget == "project_select":
+                settings[field_name] = selected_project_id or (
+                    projects[0]["id"] if projects else ""
+                )
+            elif field_schema.get("type") == "boolean":
+                settings[field_name] = False
+            elif field_schema.get("type") in ("integer", "number"):
+                settings[field_name] = 0
+            else:
+                settings[field_name] = ""
     return settings
 
 
@@ -263,6 +271,18 @@ def register_pages() -> None:
             except Exception:  # noqa: BLE001
                 pass
 
+        def _stored_workflow_settings() -> dict:
+            try:
+                return app.storage.user.get("workflow_settings") or {}
+            except Exception:  # noqa: BLE001
+                return {}
+
+        def _store_workflow_settings(settings: dict) -> None:
+            try:
+                app.storage.user["workflow_settings"] = settings
+            except Exception:  # noqa: BLE001
+                pass
+
         ui.query("body").classes("m-0")
         ui.colors(primary="#4f46e5")
         # Force an explicit full-viewport height down the layout chain so the
@@ -347,6 +367,7 @@ def register_pages() -> None:
                 ui.notify(f"Could not save settings: {_error_detail(exc)}", type="negative")
                 return
             state["workflow_settings"] = updated.get("workflow_settings") or {}
+            _store_workflow_settings(settings)
             await refresh_context_estimate()
 
         def render_workflow_settings() -> None:
@@ -380,7 +401,11 @@ def register_pages() -> None:
             if info is None:
                 return
             defaults = _default_settings(
-                info["settings_schema"], state["models"], _real_projects(), state["project_id"]
+                info["settings_schema"],
+                state["models"],
+                _real_projects(),
+                state["project_id"],
+                _stored_workflow_settings(),
             )
             try:
                 updated = await client.update_chat(
@@ -701,7 +726,11 @@ def register_pages() -> None:
             )
             workflow = next(w for w in workflows if w["id"] == default_id)
             defaults = _default_settings(
-                workflow["settings_schema"], state["models"], _real_projects(), state["project_id"]
+                workflow["settings_schema"],
+                state["models"],
+                _real_projects(),
+                state["project_id"],
+                _stored_workflow_settings(),
             )
             try:
                 chat = await client.create_chat(

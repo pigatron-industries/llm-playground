@@ -152,7 +152,7 @@ async def stream_message(
     """
     payload = {"content": content}
     final_chat: dict | None = None
-    async with _client(300) as client:
+    async with _client(600) as client:
         async with client.stream(
             "POST", f"/chats/{chat_id}/messages", json=payload
         ) as resp:
