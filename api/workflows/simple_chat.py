@@ -24,6 +24,10 @@ class SimpleChatSettings(BaseModel):
         json_schema_extra={"widget": "textarea"},
     )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    preserve_tool_results: bool = Field(
+        default=False,
+        description="Keep tool call results in the conversation sent to the model for full context",
+    )
 
 
 @register_workflow
@@ -39,7 +43,7 @@ class SimpleChatWorkflow(Workflow):
         conversation: list[Message] = []
         if settings.system_prompt:
             conversation.append(Message(role="system", content=settings.system_prompt))
-        conversation.extend(history_for_model(ctx.chat.messages))
+        conversation.extend(history_for_model(ctx.chat.messages, preserve_tool_results=settings.preserve_tool_results))
         conversation.append(ctx.user_message)
 
         client = get_client()

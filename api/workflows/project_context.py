@@ -30,6 +30,10 @@ class ProjectContextSettings(BaseModel):
     )
     model: str = Field(json_schema_extra={"widget": "model_select"})
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    preserve_tool_results: bool = Field(
+        default=False,
+        description="Keep tool call results in the conversation sent to the model for full context",
+    )
 
 
 def _read_project_files(root: Path) -> str:
@@ -83,7 +87,7 @@ class ProjectContextWorkflow(Workflow):
                 ),
             )
         ]
-        conversation.extend(history_for_model(ctx.chat.messages))
+        conversation.extend(history_for_model(ctx.chat.messages, preserve_tool_results=settings.preserve_tool_results))
         conversation.append(ctx.user_message)
 
         client = get_client()
