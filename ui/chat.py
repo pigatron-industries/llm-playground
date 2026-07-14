@@ -76,7 +76,7 @@ def _assistant_tool_report(message: dict) -> tuple[str, bool]:
     for call in calls:
         name = call.get("name", "unknown_tool")
         arguments = call.get("arguments", "{}")
-        lines.append(f"Tool call: {name}(\n{arguments}\n)")
+        lines.append(f"**Tool call:**\n```\n{name}\n{arguments}\n```")
     return ("\n\n".join(lines), True)
 
 
@@ -593,9 +593,11 @@ def register_pages() -> None:
                     is_user = msg["role"] == "user"
                     if msg["role"] == "tool":
                         with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
-                            ui.label(f"Result:\n{msg.get('content', '')}").classes(
-                                "text-gray-800 break-words max-w-full whitespace-pre-wrap"
-                            )
+                            content = msg.get("content", "")
+                            ui.markdown(
+                                f"**Result**\n\n```\n{content}\n```",
+                                extras=["fenced-code-blocks"],
+                            ).classes("text-gray-800 break-words max-w-full")
                         continue
 
                     if msg["role"] == "assistant":
@@ -625,17 +627,10 @@ def register_pages() -> None:
                             # Render assistant replies. Tool reports are verbatim, content is markdown.
                             with ui.column().classes("w-full gap-2"):
                                 for part_text, is_tool_part in body_parts:
-                                    if is_tool_part:
-                                        # Tool report - render verbatim
-                                        ui.label(part_text).classes(
-                                            "text-gray-800 whitespace-pre-wrap break-words font-mono text-sm"
-                                        )
-                                    else:
-                                        # Regular content - render as markdown
-                                        ui.markdown(
-                                            part_text,
-                                            extras=["fenced-code-blocks", "tables"],
-                                        ).classes("text-gray-800 break-words max-w-full")
+                                    ui.markdown(
+                                        part_text,
+                                        extras=["fenced-code-blocks", "tables"],
+                                    ).classes("text-gray-800 break-words max-w-full")
 
         async def render_chat_list() -> None:
             try:
@@ -783,7 +778,7 @@ def register_pages() -> None:
                     bubble = _message_bubble("Assistant", is_user=False)
                     with bubble:
                         spinner = ui.spinner(size="sm")
-                        md = ui.markdown("").classes(
+                        md = ui.markdown("", extras=["fenced-code-blocks"]).classes(
                             "text-gray-800 break-words max-w-full"
                         )
                 live.update(bubble=bubble, spinner=spinner, md=md, text="")
@@ -805,16 +800,17 @@ def register_pages() -> None:
             def on_tool_call(name: str, arguments: dict) -> None:
                 hide_spinner()
                 args_str = "\n".join(f"  {key}={value}" for key, value in arguments.items())
-                live["text"] += f"Tool call: {name}(\n{args_str}\n)"
+                live["text"] += f"**Tool call:**\n```\n{name}\n{args_str}\n```"
                 live["md"].set_content(live["text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
                 with messages_col:
                     with _message_bubble("Tool", is_user=False):
-                        ui.label(f"Result:\n{result}").classes(
-                            "text-gray-800 break-words max-w-full whitespace-pre-wrap font-mono text-sm"
-                        )
+                        ui.markdown(
+                            f"**Result**\n\n```\n{result}\n```",
+                            extras=["fenced-code-blocks"],
+                        ).classes("text-gray-800 break-words max-w-full")
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.

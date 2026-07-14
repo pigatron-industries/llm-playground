@@ -62,34 +62,31 @@ def list_files_in_directory(path: str, recursive: bool = False, include_hidden: 
             for item in items:
                 if should_skip(item):
                     continue
+                rel_path = item.relative_to(project_root)
                 if item.is_dir():
-                    lines.append(f"  [DIR]  {item.name}/")
+                    lines.append(f"[DIR] {rel_path}/")
                 else:
                     size = item.stat().st_size
-                    lines.append(f"  [FILE] {item.name} ({size} bytes)")
+                    lines.append(f"[FILE] {rel_path} ({size} bytes)")
         else:
             lines = [f"Recursive contents of {path}:"]
             for root, dirs, files in os.walk(target_path):
-                level = len(Path(root).relative_to(target_path).parts)
-                indent = "  " * level
-                rel_root = Path(root).relative_to(target_path)
-                if level > 0:
-                    lines.append(f"{indent}[DIR] {rel_root.name}/")
-
                 for file in sorted(files):
                     file_path = Path(root) / file
                     if should_skip(file_path):
                         continue
+                    rel_path = file_path.relative_to(project_root)
                     size = file_path.stat().st_size
-                    lines.append(f"{indent}  [FILE] {file} ({size} bytes)")
+                    lines.append(f"[FILE] {rel_path} ({size} bytes)")
 
                 # Filter out hidden dirs for the next iteration
                 if not include_hidden:
                     dirs[:] = [d for d in dirs if not d.startswith(".")]
 
                 for dir_name in sorted(dirs):
-                    if level == 0:
-                        lines.append(f"{indent}  [DIR]  {dir_name}/")
+                    dir_path = Path(root) / dir_name
+                    rel_path = dir_path.relative_to(project_root)
+                    lines.append(f"[DIR]  {rel_path}/")
     except PermissionError:
         return f"Error: Permission denied accessing '{path}'"
 
@@ -111,8 +108,6 @@ def read_file(path: str) -> str:
 
     # Normalize and resolve the path
     target_path = (project_root / path).resolve()
-
-    print(f"Reading file: {target_path}")  # Debugging statement
 
     # Security check: ensure the resolved path is within the project root
     try:
