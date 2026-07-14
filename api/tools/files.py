@@ -94,3 +94,42 @@ def list_files_in_directory(path: str, recursive: bool = False, include_hidden: 
         return f"Error: Permission denied accessing '{path}'"
 
     return "\n".join(lines)
+
+
+class ReadFileArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="File path relative to project root (e.g., 'api/tools/files.py')")
+
+
+@register_tool(ReadFileArgs, description="Read the contents of a file relative to the project root.")
+def read_file(path: str) -> str:
+    # Get the current project root from context, fallback to hardcoded default
+    project_root = _current_project_root.get()
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+
+    # Normalize and resolve the path
+    target_path = (project_root / path).resolve()
+
+    print(f"Reading file: {target_path}")  # Debugging statement
+
+    # Security check: ensure the resolved path is within the project root
+    try:
+        target_path.relative_to(project_root)
+    except ValueError:
+        return f"Error: Path '{path}' is outside the project root"
+
+    if not target_path.exists():
+        return f"Error: File '{path}' does not exist"
+
+    if not target_path.is_file():
+        return f"Error: Path '{path}' is not a file"
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except PermissionError:
+        return f"Error: Permission denied reading '{path}'"
+    except UnicodeDecodeError:
+        return f"Error: File '{path}' is not a valid UTF-8 text file"
