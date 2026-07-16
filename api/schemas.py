@@ -23,6 +23,7 @@ class ToolCall(BaseModel):
 class Message(BaseModel):
     role: Role
     content: str = ""
+    reasoning: str = ""
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)

@@ -142,13 +142,12 @@ async def stream_message(
     on_delta: Callable[[str], None],
     on_tool_call: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
 ) -> dict:
-    """Stream a message reply, calling ``on_delta`` per chunk.
-
-    Model/temperature/system prompt/tools all come from the chat's workflow
-    settings server-side now, so the request only carries the new content.
-    Returns the full updated chat (from the final ``done`` event). Raises on a
-    provider error (surfaced as an ``error`` event) or an HTTP error.
+    """Stream a message reply, calling ``on_delta`` per chunk (and
+    ``on_reasoning`` per chunk of the model's reasoning trace, if the
+    provider/model emits one — most don't, so it may never fire).
+    ...
     """
     payload = {"content": content}
     final_chat: dict | None = None
@@ -166,6 +165,8 @@ async def stream_message(
                 kind = event.get("type")
                 if kind == "delta":
                     on_delta(event["content"])
+                elif kind == "reasoning" and on_reasoning is not None:
+                    on_reasoning(event["content"])
                 elif kind == "tool_call" and on_tool_call is not None:
                     on_tool_call(event["name"], event.get("arguments", {}))
                 elif kind == "tool_result" and on_tool_result is not None:

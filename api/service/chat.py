@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 
 from openai import APIConnectionError
 
-from ..providers import StreamComplete, TextDelta, ToolCallEvent, ToolResultEvent
+from ..providers import StreamComplete, TextDelta, ReasoningDelta, ToolCallEvent, ToolResultEvent
 from ..schemas import Message, SendMessageRequest
 from ..store import get_store
 from ..workflows import WorkflowContext, get_workflow
@@ -34,6 +34,8 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
     try:
         async for event in workflow.run(ctx):
             if isinstance(event, TextDelta):
+                yield json.dumps({"type": "delta", "content": event.content}) + "\n"
+            if isinstance(event, ReasoningDelta):
                 yield json.dumps({"type": "delta", "content": event.content}) + "\n"
             elif isinstance(event, ToolCallEvent):
                 yield (

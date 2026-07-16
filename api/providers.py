@@ -27,6 +27,11 @@ class TextDelta:
 
 
 @dataclass(frozen=True)
+class ReasoningDelta:
+    content: str
+
+
+@dataclass(frozen=True)
 class ToolCallEvent:
     id: str
     name: str
@@ -46,7 +51,7 @@ class StreamComplete:
     messages: list[Message]
 
 
-ChatEvent = TextDelta | ToolCallEvent | ToolResultEvent | StreamComplete
+ChatEvent = TextDelta | ReasoningDelta | ToolCallEvent | ToolResultEvent | StreamComplete
 
 
 def message_to_api(message: Message) -> dict[str, Any]:
@@ -143,6 +148,7 @@ class LLMClient:
             )
 
             content_parts: list[str] = []
+            reasoning_parts: list[str] = []
             tool_calls_acc: dict[int, dict[str, str]] = {}
 
             async for chunk in stream:
@@ -153,6 +159,11 @@ class LLMClient:
                 if delta.content:
                     content_parts.append(delta.content)
                     yield TextDelta(delta.content)
+
+                reasoning_chunk = getattr(delta, "reasoning_content", None)
+                if reasoning_chunk:
+                    reasoning_parts.append(reasoning_chunk)
+                    yield ReasoningDelta(reasoning_chunk)
 
                 if delta.tool_calls:
                     for tool_call in delta.tool_calls:
@@ -172,6 +183,7 @@ class LLMClient:
                 assistant_message = Message(
                     role="assistant",
                     content="".join(content_parts),
+                    reasoning="".join(reasoning_parts) or None,
                     tool_calls=[
                         ToolCall(id=entry["id"], name=entry["name"], arguments=entry["arguments"])
                         for entry in ordered
@@ -198,7 +210,8 @@ class LLMClient:
                 continue
 
             final_text = "".join(content_parts)
-            produced.append(Message(role="assistant", content=final_text))
+            final_reasoning = "".join(reasoning_parts) or None
+            produced.append(Message(role="assistant", content=final_text, reasoning=final_reasoning))
             yield StreamComplete(messages=produced)
             return
 

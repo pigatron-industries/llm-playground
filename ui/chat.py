@@ -628,15 +628,17 @@ def register_pages() -> None:
                     if msg["role"] == "assistant":
                         tool_report, is_tool = _assistant_tool_report(msg)
                         content = msg.get("content") or ""
+                        reasoning = msg.get("reasoning") or ""
                         body_parts = []  # List of (text, is_tool_report)
                         if is_tool:
                             body_parts.append((tool_report, True))
                         if content.strip():
                             body_parts.append((content, False))
-                        if not body_parts:
+                        if not body_parts and not reasoning:
                             continue
                     else:
                         body_parts = [(msg.get("content", ""), False)]
+                        reasoning = ""
 
                     with _message_bubble(
                         "You" if is_user else "Assistant",
@@ -651,6 +653,13 @@ def register_pages() -> None:
                         else:
                             # Render assistant replies. Tool reports are verbatim, content is markdown.
                             with ui.column().classes("w-full gap-2"):
+                                if reasoning:
+                                    with ui.expansion("Thinking", icon="psychology").classes(
+                                        "w-full text-gray-500 text-sm"
+                                    ):
+                                        ui.markdown(reasoning).classes(
+                                            "text-gray-500 text-sm italic break-words"
+                                        )
                                 for part_text, is_tool_part in body_parts:
                                     ui.markdown(
                                         part_text,
@@ -800,16 +809,28 @@ def register_pages() -> None:
             # from async event handling, well after any earlier ``with``
             # block has closed — creating elements without that explicit
             # context would silently attach them to the wrong container.
-            live: dict = {"bubble": None, "spinner": None, "md": None, "text": ""}
+            live: dict = {
+                "bubble": None, "spinner": None, "md": None, "text": "",
+                "reasoning_exp": None, "reasoning_md": None, "reasoning_text": "",
+            }
 
             def open_assistant_bubble() -> None:
                 with messages_col:
                     bubble = _message_bubble("Assistant", is_user=False)
                     with bubble:
-                        spinner = ui.spinner(size="sm")
-                        md = ui.markdown("", extras=["fenced-code-blocks"]).classes(
-                            "text-gray-800 break-words max-w-full"
-                        )
+                        with ui.column().classes("w-full gap-1"):
+                            reasoning_exp = ui.expansion(
+                                "Thinking…", icon="psychology"
+                            ).classes("w-full text-gray-500 text-sm")
+                            reasoning_exp.set_visibility(False)
+                            with reasoning_exp:
+                                reasoning_md = ui.markdown("").classes(
+                                    "text-gray-500 text-sm italic break-words"
+                                )
+                            spinner = ui.spinner(size="sm")
+                            md = ui.markdown("", extras=["fenced-code-blocks"]).classes(
+                                "text-gray-800 break-words max-w-full"
+                            )
                 live.update(bubble=bubble, spinner=spinner, md=md, text="")
                 messages_area.scroll_to(percent=1.0)
 
@@ -824,6 +845,16 @@ def register_pages() -> None:
                 hide_spinner()
                 live["text"] += chunk
                 live["md"].set_content(live["text"])
+                messages_area.scroll_to(percent=1.0)
+
+            def on_reasoning(chunk: str) -> None:
+                hide_spinner()
+                exp = live["reasoning_exp"]
+                if exp is not None and not exp.visible:
+                    exp.set_visibility(True)
+                    exp.open()
+                live["reasoning_text"] += chunk
+                live["reasoning_md"].set_content(live["reasoning_text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_call(name: str, arguments: dict) -> None:
@@ -854,6 +885,7 @@ def register_pages() -> None:
                     on_delta,
                     on_tool_call,
                     on_tool_result,
+                    on_reasoning
                 )
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
