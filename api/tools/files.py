@@ -128,3 +128,88 @@ def read_file(path: str) -> str:
         return f"Error: Permission denied reading '{path}'"
     except UnicodeDecodeError:
         return f"Error: File '{path}' is not a valid UTF-8 text file"
+
+
+class SearchFilesArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="Directory path relative to project root to search in (e.g., './' or 'api/tools')")
+    pattern: str = Field(description="Text pattern to search for in file contents")
+    recursive: bool = Field(default=False, description="Recursively search in subdirectories")
+    include_hidden: bool = Field(default=False, description="Include hidden files and directories (starting with .)")
+    case_sensitive: bool = Field(default=False, description="Whether the search should be case sensitive")
+
+
+@register_tool(SearchFilesArgs, description="Search for a text pattern in files within a given directory relative to the project root.")
+def search_in_files(path: str, pattern: str, recursive: bool = False, include_hidden: bool = False, case_sensitive: bool = False) -> str:
+    # Get the current project root from context, fallback to hardcoded default
+    project_root = _current_project_root.get()
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+
+    # Normalize and resolve the path
+    target_path = (project_root / path).resolve()
+
+    # Security check: ensure the resolved path is within the project root
+    try:
+        target_path.relative_to(project_root)
+    except ValueError:
+        return f"Error: Path '{path}' is outside the project root"
+
+    if not target_path.exists():
+        return f"Error: Path '{path}' does not exist"
+
+    if not target_path.is_dir():
+        return f"Error: Path '{path}' is not a directory"
+
+    search_pattern = pattern if case_sensitive else pattern.lower()
+
+    def should_skip(item_path: Path) -> bool:
+        """Check if item should be skipped (hidden files)."""
+        if include_hidden:
+            return False
+        return item_path.name.startswith(".")
+
+    def search_in_file(file_path: Path) -> list[str]:
+        """Search for pattern in a single file and return matching lines."""
+        matches = []
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line_num, line in enumerate(f, 1):
+                    haystack = line if case_sensitive else line.lower()
+                    if search_pattern in haystack:
+                        rel_path = file_path.relative_to(project_root)
+                        matches.append(f"{rel_path}:{line_num}: {line.rstrip()}")
+        except PermissionError:
+            return [f"Error: Permission denied reading '{file_path}'"]
+        except UnicodeDecodeError:
+            return [f"Error: File '{file_path}' is not a valid UTF-8 text file"]
+        return matches
+
+    try:
+        matches = []
+        if not recursive:
+            items = sorted(target_path.iterdir())
+            for item in items:
+                if should_skip(item):
+                    continue
+                if item.is_file():
+                    matches.extend(search_in_file(item))
+        else:
+            for root, dirs, files in os.walk(target_path):
+                # Filter out hidden dirs for the next iteration
+                if not include_hidden:
+                    dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+                for file in sorted(files):
+                    file_path = Path(root) / file
+                    if should_skip(file_path):
+                        continue
+                    matches.extend(search_in_file(file_path))
+
+        if not matches:
+            return f"No matches found for pattern '{pattern}' in '{path}'"
+
+        return f"Found {len(matches)} match(es) for pattern '{pattern}' in '{path}':\n" + "\n".join(matches)
+    except PermissionError:
+        return f"Error: Permission denied accessing '{path}'"
