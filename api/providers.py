@@ -183,7 +183,7 @@ class LLMClient:
                 assistant_message = Message(
                     role="assistant",
                     content="".join(content_parts),
-                    reasoning="".join(reasoning_parts) or None,
+                    reasoning="".join(reasoning_parts),
                     tool_calls=[
                         ToolCall(id=entry["id"], name=entry["name"], arguments=entry["arguments"])
                         for entry in ordered
@@ -210,7 +210,7 @@ class LLMClient:
                 continue
 
             final_text = "".join(content_parts)
-            final_reasoning = "".join(reasoning_parts) or None
+            final_reasoning = "".join(reasoning_parts)
             produced.append(Message(role="assistant", content=final_text, reasoning=final_reasoning))
             yield StreamComplete(messages=produced)
             return
