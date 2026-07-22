@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException
@@ -30,6 +31,7 @@ from ..store import get_store
 from ..workflows import get_workflow, list_workflows
 
 router = APIRouter(prefix="/api")
+log = logging.getLogger("llm_harness.routes")
 
 
 @router.get("/provider", response_model=ProviderInfo)
@@ -44,11 +46,13 @@ async def list_models() -> ModelsResponse:
     try:
         models = await client.list_models()
     except APIConnectionError as exc:
+        log.exception("Could not reach provider at %s", client.config.base_url)
         raise HTTPException(
             status_code=502,
             detail=f"Could not reach provider at {client.config.base_url}: {exc}",
         ) from exc
     except APIStatusError as exc:
+        log.exception("Provider returned an error listing models")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     context_lengths = await client.model_context_lengths()
     return ModelsResponse(

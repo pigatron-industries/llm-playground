@@ -9,6 +9,7 @@ up from the chat) owns the model settings and the actual loop — see
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 
 from openai import APIConnectionError
@@ -17,6 +18,8 @@ from ..providers import StreamComplete, TextDelta, ReasoningDelta, ToolCallEvent
 from ..schemas import Message, SendMessageRequest
 from ..store import get_store
 from ..workflows import WorkflowContext, get_workflow
+
+log = logging.getLogger("llm_harness.chat")
 
 
 async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIterator[str]:
@@ -62,9 +65,11 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
             elif isinstance(event, StreamComplete):
                 produced = event.messages
     except APIConnectionError as exc:
+        log.exception("Could not reach provider for chat %s", chat_id)
         yield json.dumps({"type": "error", "detail": f"Could not reach provider: {exc}"}) + "\n"
         return
     except Exception as exc:  # noqa: BLE001 — any provider error mid-stream
+        log.exception("Provider error mid-stream for chat %s", chat_id)
         yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
         return
 
