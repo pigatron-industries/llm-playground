@@ -40,10 +40,7 @@ def _format_time(iso: str | None) -> tuple[str, str]:
     """Return (short, full) local-time strings for an ISO timestamp."""
     if not iso:
         return ("", "")
-    # try:
     local = datetime.fromisoformat(iso).astimezone()
-    # except ValueError:
-    #     return ("", "")
     return (local.strftime("%H:%M"), local.strftime("%Y-%m-%d %H:%M:%S"))
 
 
@@ -619,10 +616,11 @@ def register_pages() -> None:
                     if msg["role"] == "tool":
                         with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
                             content = msg.get("content", "")
-                            ui.markdown(
-                                f"**Result**\n\n```\n{content}\n```",
-                                extras=["fenced-code-blocks"],
-                            ).classes("text-gray-800 break-words max-w-full")
+                            with ui.expansion("Tool Result", icon="build").classes("w-full"):
+                                ui.markdown(
+                                    f"**Result**\n\n```\n{content}\n```",
+                                    extras=["fenced-code-blocks"],
+                                ).classes("text-gray-800 break-words max-w-full")
                         continue
 
                     if msg["role"] == "assistant":
@@ -661,10 +659,17 @@ def register_pages() -> None:
                                             "text-gray-500 text-sm italic break-words"
                                         )
                                 for part_text, is_tool_part in body_parts:
-                                    ui.markdown(
-                                        part_text,
-                                        extras=["fenced-code-blocks", "tables"],
-                                    ).classes("text-gray-800 break-words max-w-full")
+                                    if is_tool_part:
+                                        with ui.expansion("Tool Use", icon="build").classes("w-full"):
+                                            ui.markdown(
+                                                part_text,
+                                                extras=["fenced-code-blocks", "tables"],
+                                            ).classes("text-gray-800 break-words max-w-full")
+                                    else:
+                                        ui.markdown(
+                                            part_text,
+                                            extras=["fenced-code-blocks", "tables"],
+                                        ).classes("text-gray-800 break-words max-w-full")
 
         async def render_chat_list() -> None:
             try:
@@ -867,10 +872,11 @@ def register_pages() -> None:
             def on_tool_result(name: str, result: str) -> None:
                 with messages_col:
                     with _message_bubble("Tool", is_user=False):
-                        ui.markdown(
-                            f"**Result**\n\n```\n{result}\n```",
-                            extras=["fenced-code-blocks"],
-                        ).classes("text-gray-800 break-words max-w-full")
+                        with ui.expansion("Tool Result", icon="build").classes("w-full"):
+                            ui.markdown(
+                                f"**Result**\n\n```\n{result}\n```",
+                                extras=["fenced-code-blocks"],
+                            ).classes("text-gray-800 break-words max-w-full")
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
