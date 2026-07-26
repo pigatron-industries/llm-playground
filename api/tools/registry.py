@@ -15,6 +15,7 @@ class RegisteredTool:
     description: str
     params_model: type[BaseModel]
     handler: Callable[..., str]
+    category: str = "General"
 
     def metadata(self) -> dict[str, Any]:
         """Render OpenAI-compatible tool metadata from the Pydantic model."""
@@ -26,6 +27,7 @@ class RegisteredTool:
                 "name": self.name,
                 "description": self.description,
                 "parameters": schema,
+                "category": self.category,
             },
         }
 
@@ -38,6 +40,7 @@ def register_tool(
     *,
     name: str | None = None,
     description: str | None = None,
+    category: str = "General",
 ) -> Callable[[Callable[..., str]], Callable[..., str]]:
     """Decorator to register a callable as an LLM tool."""
 
@@ -49,6 +52,7 @@ def register_tool(
             description=tool_description,
             params_model=params_model,
             handler=func,
+            category=category,
         )
         return func
 

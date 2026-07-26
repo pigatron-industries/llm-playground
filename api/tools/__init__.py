@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from . import edit as _edit  # noqa: F401 - imported for registration side effects
 from . import files as _files  # noqa: F401 - imported for registration side effects
 from . import math as _math  # noqa: F401 - imported for registration side effects
 from .files import set_project_root
@@ -14,10 +15,11 @@ def execute_tool(name: str, arguments: dict) -> str:
     return execute_registered_tool(name, arguments)
 
 
-def get_tools(*, include_file_tools: bool = False) -> list[dict]:
-    """Get available tools, optionally including file system tools."""
+def get_tools(tool_types: list[str] | None = None) -> list[dict]:
+    """Get available tools, filtered by category (e.g., 'Math', 'Files', 'Edit')."""
     all_tools = get_tool_metadata()
-    if include_file_tools:
+
+    if tool_types is None:
         return all_tools
-    # Filter out file tools for workflows without project context
-    return [tool for tool in all_tools if tool["function"]["name"] != "list_files_in_directory"]
+
+    return [tool for tool in all_tools if tool["function"]["category"] in tool_types]

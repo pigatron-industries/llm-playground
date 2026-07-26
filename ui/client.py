@@ -58,6 +58,18 @@ async def create_project(name: str, path: str) -> dict:
         return resp.json()
 
 
+async def update_project(project_id: str, name: str | None = None, path: str | None = None) -> dict:
+    payload: dict = {}
+    if name is not None:
+        payload["name"] = name
+    if path is not None:
+        payload["path"] = path
+    async with _client(10) as client:
+        resp = await client.patch(f"/projects/{project_id}", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def delete_project(project_id: str) -> None:
     async with _client(10) as client:
         resp = await client.delete(f"/projects/{project_id}")

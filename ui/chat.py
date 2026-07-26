@@ -581,9 +581,54 @@ def register_pages() -> None:
                         )
                         if project.get("id") is not None:
                             ui.button(
+                                icon="edit",
+                                on_click=lambda _, p=project: edit_project(p),
+                            ).props("flat dense round size=sm").classes("text-gray-400").tooltip("Edit project")
+                            ui.button(
                                 icon="delete",
                                 on_click=lambda _, p=project: remove_project(p),
                             ).props("flat dense round size=sm").classes("text-gray-400")
+
+
+        def edit_project(project: dict[str, str]) -> None:
+            dialog = ui.dialog()
+            with dialog, ui.card().classes("w-[360px]"):
+                ui.label("Edit Project").classes("text-base font-medium")
+                project_name_input = ui.input("Name", value=project.get("name", "")).classes("w-full")
+                project_path_input = ui.input("Folder", value=project.get("path", "")).classes("w-full")
+                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                    ui.button("Cancel", on_click=dialog.close).props("flat")
+                    ui.button(
+                        "Save",
+                        on_click=lambda: save_project_edit(
+                            project.get("id"), project_name_input.value, project_path_input.value, dialog
+                        ),
+                    ).props("flat")
+            dialog.open()
+            # Focus the name input when dialog opens
+            ui.timer(0.1, lambda: project_name_input.focus(), once=True)
+
+
+        async def save_project_edit(project_id: str, name: str, path: str, dialog) -> None:
+            clean_name = (name or "").strip()
+            clean_path = (path or "").strip()
+            if not clean_name or not clean_path:
+                ui.notify("Enter both a project name and folder path.", type="warning")
+                return
+            try:
+                updated = await client.update_project(project_id, name=clean_name, path=clean_path)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not update project: {_error_detail(exc)}", type="negative")
+                return
+            # Update the local projects list
+            for i, p in enumerate(projects):
+                if p.get("id") == project_id:
+                    projects[i] = {"id": updated["id"], "name": updated["name"], "path": updated["path"]}
+                    break
+            dialog.close()
+            render_projects()
+            ui.notify("Project updated.", type="positive")
+
 
         async def remove_project(project: dict[str, str]) -> None:
             project_id = project.get("id")

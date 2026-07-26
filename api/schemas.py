@@ -115,6 +115,11 @@ class CreateProjectRequest(BaseModel):
     path: str
 
 
+class UpdateProjectRequest(BaseModel):
+    name: str | None = None
+    path: str | None = None
+
+
 class SendMessageRequest(BaseModel):
     """A new user turn. Model/temperature/system prompt/tools all live on the
     chat's workflow settings now, not per-message."""

@@ -18,6 +18,7 @@ from ..schemas import (
     ContextEstimate,
     CreateChatRequest,
     CreateProjectRequest,
+    UpdateProjectRequest,
     Message,
     ModelsResponse,
     Project,
@@ -76,6 +77,18 @@ def list_projects() -> list[Project]:
 @router.post("/projects", response_model=Project)
 def create_project(req: CreateProjectRequest) -> Project:
     return get_project_store().create(name=req.name, path=req.path)
+
+
+@router.patch("/projects/{project_id}", response_model=Project)
+def update_project(project_id: str, req: UpdateProjectRequest) -> Project:
+    updated = get_project_store().update(
+        project_id,
+        name=req.name,
+        path=req.path,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return updated
 
 
 @router.delete("/projects/{project_id}", status_code=204)

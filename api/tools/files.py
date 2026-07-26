@@ -27,7 +27,7 @@ class ListFilesArgs(BaseModel):
     include_hidden: bool = Field(default=False, description="Include hidden files and directories (starting with .)")
 
 
-@register_tool(ListFilesArgs, description="List files and directories in a given directory relative to the project root.")
+@register_tool(ListFilesArgs, description="List files and directories in a given directory relative to the project root.", category="Files")
 def list_files_in_directory(path: str, recursive: bool = False, include_hidden: bool = False) -> str:
     # Get the current project root from context, fallback to hardcoded default
     project_root = _current_project_root.get()
@@ -99,7 +99,7 @@ class ReadFileArgs(BaseModel):
     path: str = Field(description="File path relative to project root (e.g., 'api/tools/files.py')")
 
 
-@register_tool(ReadFileArgs, description="Read the contents of a file relative to the project root.")
+@register_tool(ReadFileArgs, description="Read the contents of a file relative to the project root.", category="Files")
 def read_file(path: str) -> str:
     # Get the current project root from context, fallback to hardcoded default
     project_root = _current_project_root.get()
@@ -140,7 +140,7 @@ class SearchFilesArgs(BaseModel):
     case_sensitive: bool = Field(default=False, description="Whether the search should be case sensitive")
 
 
-@register_tool(SearchFilesArgs, description="Search for a text pattern in files within a given directory relative to the project root.")
+@register_tool(SearchFilesArgs, description="Search for a text pattern in files within a given directory relative to the project root.", category="Files")
 def search_in_files(path: str, pattern: str, recursive: bool = False, include_hidden: bool = False, case_sensitive: bool = False) -> str:
     # Get the current project root from context, fallback to hardcoded default
     project_root = _current_project_root.get()

@@ -12,6 +12,6 @@ class AddNumbersArgs(BaseModel):
     b: float = Field(description="Second number")
 
 
-@register_tool(AddNumbersArgs, description="Add two numbers together.")
+@register_tool(AddNumbersArgs, description="Add two numbers together.", category="Math")
 def add_numbers(a: float, b: float) -> str:
     return str(a + b)

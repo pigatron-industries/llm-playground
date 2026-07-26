@@ -19,7 +19,7 @@ from .registry import register_workflow
 # large project degrades to a truncation notice instead of an oversized
 # request the provider will reject or take forever on.
 _MAX_CONTEXT_CHARS = 200_000
-
+TOOL_TYPES = ["Math", "Files"]
 
 class ProjectContextSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -95,7 +95,7 @@ class ProjectContextWorkflow(Workflow):
             model=settings.model,
             messages=conversation,
             temperature=settings.temperature,
-            tools=get_tools(include_file_tools=False),
+            tools=get_tools(tool_types=TOOL_TYPES),
         ):
             yield event
 

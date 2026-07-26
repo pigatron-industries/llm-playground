@@ -62,6 +62,19 @@ class ProjectStore:
         self._write(remaining)
         return True
 
+    def update(self, project_id: str, name: str | None = None, path: str | None = None) -> Project | None:
+        projects = self._read()
+        for i, project in enumerate(projects):
+            if project.id == project_id:
+                if name is not None:
+                    project.name = name
+                if path is not None:
+                    project.path = path
+                projects[i] = project
+                self._write(projects)
+                return project
+        return None
+
 
 _store: ProjectStore | None = None
 

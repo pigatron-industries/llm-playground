@@ -13,6 +13,8 @@ from .base import Workflow, WorkflowContext
 from .common import history_for_model
 from .registry import register_workflow
 
+TOOL_TYPES = ["Math"] 
+
 
 class SimpleChatSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -51,7 +53,7 @@ class SimpleChatWorkflow(Workflow):
             model=settings.model,
             messages=conversation,
             temperature=settings.temperature,
-            tools=get_tools(include_file_tools=False),
+            tools=get_tools(tool_types=TOOL_TYPES),
         ):
             yield event
 
