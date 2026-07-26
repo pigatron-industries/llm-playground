@@ -119,12 +119,15 @@ class ChatStore:
     def update(
         self,
         chat_id: str,
+        title: str | None = None,
         workflow_id: str | None = None,
         workflow_settings: dict | None = None,
     ) -> Chat:
         chat = self.get(chat_id)
         if chat is None:
             raise KeyError(chat_id)
+        if title is not None:
+            chat.title = title
         if workflow_id is not None:
             chat.workflow_id = workflow_id
         if workflow_settings is not None:

@@ -99,6 +99,7 @@ class UpdateChatRequest(BaseModel):
     schema, not the old one's.
     """
 
+    title: str | None = None
     workflow_id: str | None = None
     workflow_settings: dict[str, Any] | None = None
 

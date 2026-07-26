@@ -694,6 +694,9 @@ def register_pages() -> None:
                             "flex-grow min-w-0 justify-start normal-case ellipsis"
                         )
                         ui.button(
+                            icon="edit", on_click=lambda cid=c["id"], title=c["title"]: edit_chat_title(cid, title)
+                        ).props("flat dense round size=sm").classes("text-gray-400").tooltip("Edit title")
+                        ui.button(
                             icon="delete", on_click=lambda cid=c["id"]: remove_chat(cid)
                         ).props("flat dense round size=sm").classes("text-gray-400")
 
@@ -775,6 +778,39 @@ def register_pages() -> None:
                 else:
                     clear_chat()
             await render_chat_list()
+
+        def edit_chat_title(chat_id: str, current_title: str) -> None:
+            dialog = ui.dialog()
+            with dialog, ui.card().classes("w-[360px]"):
+                ui.label("Edit Chat Title").classes("text-base font-medium")
+                title_input = ui.input("Title", value=current_title).classes("w-full")
+                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                    ui.button("Cancel", on_click=dialog.close).props("flat")
+                    ui.button(
+                        "Save",
+                        on_click=lambda: save_chat_title(chat_id, title_input.value, dialog),
+                    ).props("flat")
+            dialog.open()
+            # Focus the input when dialog opens
+            ui.timer(0.1, lambda: title_input.focus(), once=True)
+
+        async def save_chat_title(chat_id: str, new_title: str, dialog) -> None:
+            new_title = (new_title or "").strip()
+            if not new_title:
+                ui.notify("Title cannot be empty.", type="warning")
+                return
+            try:
+                updated = await client.update_chat(chat_id, title=new_title)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not update title: {_error_detail(exc)}", type="negative")
+                return
+            dialog.close()
+            # If this is the current chat, update the local state
+            if state["chat_id"] == chat_id:
+                # Update the title in the chat list by re-rendering
+                pass
+            await render_chat_list()
+            ui.notify("Title updated.", type="positive")
 
         # --- Bottom: input -----------------------------------------------
         with ui.footer().classes("bg-white border-t p-2"):

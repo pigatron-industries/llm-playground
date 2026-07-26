@@ -113,16 +113,20 @@ async def get_context_estimate(chat_id: str) -> dict:
 
 async def update_chat(
     chat_id: str,
+    title: str | None = None,
     workflow_id: str | None = None,
     workflow_settings: dict | None = None,
 ) -> dict:
-    """Update a chat's workflow and/or settings.
+    """Update a chat's title, workflow and/or settings.
 
     ``workflow_id`` is only accepted server-side while the chat has no
     messages yet; pass it together with fresh ``workflow_settings`` for the
     new workflow's schema.
+    ``title`` can be updated at any time.
     """
     payload: dict = {}
+    if title is not None:
+        payload["title"] = title
     if workflow_id is not None:
         payload["workflow_id"] = workflow_id
     if workflow_settings is not None:

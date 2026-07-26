@@ -103,7 +103,7 @@ def create_chat(req: CreateChatRequest) -> Chat:
 
 @router.patch("/chats/{chat_id}", response_model=Chat)
 def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
-    """Update a chat's workflow and/or its settings.
+    """Update a chat's title, workflow and/or its settings.
 
     ``workflow_id`` may only change while the chat has no messages yet (the
     UI locks that control after the first send — see ``ui/chat.py``).
@@ -111,6 +111,7 @@ def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
     turn. Switching workflow requires supplying fresh settings for the new
     workflow's schema in the same request — the old settings won't validate
     against a different workflow.
+    ``title`` can be changed at any time.
     """
     store = get_store()
     chat = store.get(chat_id)
@@ -144,7 +145,10 @@ def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
         raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
     return store.update(
-        chat_id, workflow_id=workflow_id, workflow_settings=settings.model_dump()
+        chat_id,
+        title=req.title,
+        workflow_id=workflow_id,
+        workflow_settings=settings.model_dump(),
     )
 
 
