@@ -75,14 +75,32 @@ class ChatStore:
         self._write(chat)
         return chat
 
+
     def get(self, chat_id: str) -> Chat | None:
         path = self._path(chat_id)
         return self._read(path) if path.is_file() else None
 
-    def list(self) -> list[ChatSummary]:
+
+    def list(self, project_id: str | None = None) -> list[ChatSummary]:
         chats = [c for c in (self._read(p) for p in self.directory.glob("*.json")) if c]
+
+        # Filter by project_id if provided
+        if project_id is not None:
+            # Only show chats linked to this specific project
+            chats = [
+                c for c in chats
+                if c.workflow_settings.get("project_id") == project_id
+            ]
+        else:
+            # No project selected: only show chats with no project link
+            chats = [
+                c for c in chats
+                if not c.workflow_settings.get("project_id")
+            ]
+
         chats.sort(key=lambda c: c.updated_at, reverse=True)
         return [self._summarise(c) for c in chats]
+
 
     def add_message(self, chat_id: str, message: Message) -> Chat:
         chat = self.get(chat_id)

@@ -149,8 +149,8 @@ def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
 
 
 @router.get("/chats", response_model=list[ChatSummary])
-def list_chats() -> list[ChatSummary]:
-    return get_store().list()
+def list_chats(project_id: str | None = None) -> list[ChatSummary]:
+    return get_store().list(project_id=project_id)
 
 
 @router.get("/chats/{chat_id}", response_model=Chat)

@@ -515,11 +515,13 @@ def register_pages() -> None:
                 _store_project_id(None)
             projects[:] = displayed_projects
             render_projects()
+            await render_chat_list()
 
-        def select_project(project_id: str | None) -> None:
+        async def select_project(project_id: str | None) -> None:
             state["project_id"] = project_id
             _store_project_id(project_id)
             render_projects()
+            await render_chat_list()
 
         def open_add_project_dialog() -> None:
             dialog = ui.dialog()
@@ -555,7 +557,7 @@ def register_pages() -> None:
                 ui.notify(f"Could not save project: {_error_detail(exc)}", type="negative")
                 return
             projects.append({"id": created["id"], "name": created["name"], "path": created["path"]})
-            select_project(created["id"])
+            await select_project(created["id"])
             if dialog is not None:
                 dialog.close()
 
@@ -592,14 +594,14 @@ def register_pages() -> None:
             except Exception as exc:  # noqa: BLE001
                 ui.notify(f"Could not delete project: {_error_detail(exc)}", type="negative")
                 return
-            if project.get("id") == state["project_id"]:
-                state["project_id"] = None
-                _store_project_id(None)
             try:
                 projects.remove(project)
             except ValueError:
                 pass
-            render_projects()
+            if project.get("id") == state["project_id"]:
+                await select_project(None)  # <-- Clears selection & refreshes list
+            else:
+                render_projects()
 
         def render_history() -> None:
             messages_col.clear()
@@ -673,7 +675,7 @@ def register_pages() -> None:
 
         async def render_chat_list() -> None:
             try:
-                chats = await client.list_chats()
+                chats = await client.list_chats(state["project_id"])
             except Exception:  # noqa: BLE001
                 return
             chat_list.clear()
@@ -767,7 +769,7 @@ def register_pages() -> None:
                 ui.notify(f"Delete failed: {_error_detail(exc)}", type="negative")
                 return
             if state["chat_id"] == chat_id:
-                chats = await client.list_chats()
+                chats = await client.list_chats(state["project_id"])
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:
@@ -942,7 +944,7 @@ def register_pages() -> None:
                 except Exception:  # noqa: BLE001 — chat was deleted / server restarted
                     loaded = False
             if not loaded:
-                chats = await client.list_chats()
+                chats = await client.list_chats(state["project_id"])
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:

@@ -67,9 +67,12 @@ async def delete_project(project_id: str) -> None:
 # --- Stored chats ----------------------------------------------------------
 
 
-async def list_chats() -> list[dict]:
+async def list_chats(project_id: str | None = None) -> list[dict]:
     async with _client(10) as client:
-        resp = await client.get("/chats")
+        params = {}
+        if project_id is not None:
+            params["project_id"] = project_id
+        resp = await client.get("/chats", params=params if params else None)
         resp.raise_for_status()
         return resp.json()
 
