@@ -86,6 +86,8 @@ def update_project(project_id: str, req: UpdateProjectRequest) -> Project:
         project_id,
         name=req.name,
         path=req.path,
+        default_workflow_id=req.default_workflow_id,
+        default_workflow_settings=req.default_workflow_settings,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Project not found")

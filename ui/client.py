@@ -58,12 +58,22 @@ async def create_project(name: str, path: str) -> dict:
         return resp.json()
 
 
-async def update_project(project_id: str, name: str | None = None, path: str | None = None) -> dict:
+async def update_project(
+    project_id: str,
+    name: str | None = None,
+    path: str | None = None,
+    default_workflow_id: str | None = None,
+    default_workflow_settings: dict | None = None,
+) -> dict:
     payload: dict = {}
     if name is not None:
         payload["name"] = name
     if path is not None:
         payload["path"] = path
+    if default_workflow_id is not None:
+        payload["default_workflow_id"] = default_workflow_id
+    if default_workflow_settings is not None:
+        payload["default_workflow_settings"] = default_workflow_settings
     async with _client(10) as client:
         resp = await client.patch(f"/projects/{project_id}", json=payload)
         resp.raise_for_status()

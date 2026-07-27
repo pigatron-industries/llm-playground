@@ -88,31 +88,44 @@ def _default_settings(
     """Best-effort default value per field, for creating a chat or switching
     a chat to a workflow it's never used before (no persisted values yet).
 
-    Uses stored_settings if provided, falling back to schema defaults."""
+    Uses stored_settings if provided, falling back to schema defaults.
+
+    ``project_select`` fields are the exception: they always reflect
+    whichever project is currently selected in the left sidebar and are
+    never taken from ``stored_settings`` — a project field is contextual to
+    "what you're looking at right now", not a preference to remember.
+    """
     projects = projects or []
     stored_settings = stored_settings or {}
     settings: dict = {}
     for field_name, field_schema in schema.get("properties", {}).items():
-        # Check stored settings first
-        if field_name in stored_settings:
+        widget = field_schema.get("widget")
+        if widget == "project_select":
+            settings[field_name] = selected_project_id or (
+                projects[0]["id"] if projects else ""
+            )
+        elif field_name in stored_settings:
             settings[field_name] = stored_settings[field_name]
         elif "default" in field_schema:
             settings[field_name] = field_schema["default"]
+        elif widget == "model_select":
+            settings[field_name] = models[0] if models else ""
+        elif field_schema.get("type") == "boolean":
+            settings[field_name] = False
+        elif field_schema.get("type") in ("integer", "number"):
+            settings[field_name] = 0
         else:
-            widget = field_schema.get("widget")
-            if widget == "model_select":
-                settings[field_name] = models[0] if models else ""
-            elif widget == "project_select":
-                settings[field_name] = selected_project_id or (
-                    projects[0]["id"] if projects else ""
-                )
-            elif field_schema.get("type") == "boolean":
-                settings[field_name] = False
-            elif field_schema.get("type") in ("integer", "number"):
-                settings[field_name] = 0
-            else:
-                settings[field_name] = ""
+            settings[field_name] = ""
     return settings
+
+
+def _project_select_fields(schema: dict) -> set[str]:
+    """Names of a workflow settings schema's ``project_select`` fields."""
+    return {
+        name
+        for name, field_schema in schema.get("properties", {}).items()
+        if field_schema.get("widget") == "project_select"
+    }
 
 
 def _render_settings_field(
@@ -355,6 +368,15 @@ def register_pages() -> None:
 
         settings_getters: dict = {}
 
+        def _without_project_fields(workflow_id: str | None, settings: dict) -> dict:
+            """Drop ``project_select`` fields — they're contextual to
+            whichever project is currently selected, never a stored default."""
+            info = next((w for w in workflows if w["id"] == workflow_id), None)
+            if info is None:
+                return dict(settings)
+            fields = _project_select_fields(info.get("settings_schema", {}))
+            return {k: v for k, v in settings.items() if k not in fields}
+
         async def save_settings() -> None:
             if not state["chat_id"]:
                 return
@@ -365,8 +387,31 @@ def register_pages() -> None:
                 ui.notify(f"Could not save settings: {_error_detail(exc)}", type="negative")
                 return
             state["workflow_settings"] = updated.get("workflow_settings") or {}
-            _store_workflow_settings(settings)
+            _store_workflow_settings(_without_project_fields(state["workflow_id"], settings))
+            await _save_project_workflow_defaults()
             await refresh_context_estimate()
+
+        async def _save_project_workflow_defaults() -> None:
+            """Remember the current chat's workflow + settings on whichever
+            project is selected in the left sidebar, so new chats started
+            for that project default to them next time."""
+            project_id = state["project_id"]
+            if not project_id:
+                return
+            try:
+                updated = await client.update_project(
+                    project_id,
+                    default_workflow_id=state["workflow_id"],
+                    default_workflow_settings=_without_project_fields(
+                        state["workflow_id"], state["workflow_settings"]
+                    ),
+                )
+            except Exception:  # noqa: BLE001 — best effort, don't block the UI on this
+                return
+            for i, p in enumerate(projects):
+                if p.get("id") == project_id:
+                    projects[i] = updated
+                    break
 
         def render_workflow_settings() -> None:
             """(Re)build the settings fields for the loaded chat's workflow,
@@ -416,6 +461,7 @@ def register_pages() -> None:
             state["workflow_id"] = updated.get("workflow_id")
             state["workflow_settings"] = updated.get("workflow_settings") or {}
             render_workflow_settings()
+            await _save_project_workflow_defaults()
             await refresh_context_estimate()
 
         workflow_select.on_value_change(on_workflow_change)
@@ -566,7 +612,7 @@ def register_pages() -> None:
             except Exception as exc:  # noqa: BLE001
                 ui.notify(f"Could not save project: {_error_detail(exc)}", type="negative")
                 return
-            projects.append({"id": created["id"], "name": created["name"], "path": created["path"]})
+            projects.append(created)
             await select_project(created["id"])
             if dialog is not None:
                 dialog.close()
@@ -639,7 +685,7 @@ def register_pages() -> None:
             # Update the local projects list
             for i, p in enumerate(projects):
                 if p.get("id") == project_id:
-                    projects[i] = {"id": updated["id"], "name": updated["name"], "path": updated["path"]}
+                    projects[i] = updated
                     break
             dialog.close()
             render_projects()
@@ -798,19 +844,31 @@ def register_pages() -> None:
                 ui.notify("No workflows available.", type="negative")
                 return
             # A project selected in the left sidebar implies you want it as
-            # context, so default to that workflow rather than a plain chat.
-            default_id = (
-                "project_context"
-                if state["project_id"] and any(w["id"] == "project_context" for w in workflows)
-                else "simple_chat"
+            # context, so default to that workflow rather than a plain chat —
+            # preferring whatever workflow/settings were last used for this
+            # specific project, if any.
+            project = (
+                next((p for p in projects if p.get("id") == state["project_id"]), None)
+                if state["project_id"]
+                else None
             )
+            project_default_id = project.get("default_workflow_id") if project else None
+            if project_default_id and any(w["id"] == project_default_id for w in workflows):
+                default_id = project_default_id
+                stored_settings = project.get("default_workflow_settings") or {}
+            elif state["project_id"] and any(w["id"] == "project_context" for w in workflows):
+                default_id = "project_context"
+                stored_settings = _stored_workflow_settings()
+            else:
+                default_id = "simple_chat"
+                stored_settings = _stored_workflow_settings()
             workflow = next(w for w in workflows if w["id"] == default_id)
             defaults = _default_settings(
                 workflow["settings_schema"],
                 state["models"],
                 _real_projects(),
                 state["project_id"],
-                _stored_workflow_settings(),
+                stored_settings,
             )
             try:
                 chat = await client.create_chat(

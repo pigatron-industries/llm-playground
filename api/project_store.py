@@ -62,7 +62,14 @@ class ProjectStore:
         self._write(remaining)
         return True
 
-    def update(self, project_id: str, name: str | None = None, path: str | None = None) -> Project | None:
+    def update(
+        self,
+        project_id: str,
+        name: str | None = None,
+        path: str | None = None,
+        default_workflow_id: str | None = None,
+        default_workflow_settings: dict | None = None,
+    ) -> Project | None:
         projects = self._read()
         for i, project in enumerate(projects):
             if project.id == project_id:
@@ -70,6 +77,10 @@ class ProjectStore:
                     project.name = name
                 if path is not None:
                     project.path = path
+                if default_workflow_id is not None:
+                    project.default_workflow_id = default_workflow_id
+                if default_workflow_settings is not None:
+                    project.default_workflow_settings = default_workflow_settings
                 projects[i] = project
                 self._write(projects)
                 return project

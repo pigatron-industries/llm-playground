@@ -108,6 +108,10 @@ class Project(BaseModel):
     id: str
     name: str
     path: str
+    # Last-used workflow for this project, so new chats started while this
+    # project is selected default to it instead of the generic fallback.
+    default_workflow_id: str | None = None
+    default_workflow_settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateProjectRequest(BaseModel):
@@ -118,6 +122,8 @@ class CreateProjectRequest(BaseModel):
 class UpdateProjectRequest(BaseModel):
     name: str | None = None
     path: str | None = None
+    default_workflow_id: str | None = None
+    default_workflow_settings: dict[str, Any] | None = None
 
 
 class SendMessageRequest(BaseModel):
