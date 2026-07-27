@@ -16,6 +16,7 @@ the full conversation from the backend.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -249,13 +250,19 @@ def register_pages() -> None:
         history: list[dict] = []
         workflows: list[dict] = []
         # Identifies whichever live-stream view (see make_stream_view) is
-        # currently allowed to render into messages_col. Reset by every
+        # currently allowed to render into messages_col, plus the network
+        # task (send()'s client.stream_message / reattach_if_streaming's
+        # client.reattach_stream) currently feeding it. Reset by every
         # set_history() call — i.e. every time we switch to showing a
         # different (or freshly reloaded) chat — so a send()/reattach task
         # left over from before a chat switch can never write into the DOM
         # again, even if the user navigates back to the very same chat
         # (which mints a fresh token of its own via reattach_if_streaming).
-        active_view: dict = {"token": None}
+        # set_history() also cancels the outgoing task so its connection is
+        # closed right away rather than left open until that generation
+        # finishes on its own — generation itself is unaffected, since it
+        # keeps running server-side independent of any one subscriber.
+        active_view: dict = {"token": None, "task": None}
         state: dict = {
             "chat_id": None,
             "project_id": None,
@@ -818,8 +825,14 @@ def register_pages() -> None:
         def set_history(messages: list[dict]) -> None:
             # We're switching to a fixed, persisted message list — retire
             # whichever live-stream view (if any) was previously allowed to
-            # render, so it can't write stray output into this new view.
+            # render, so it can't write stray output into this new view, and
+            # close out its network connection rather than leaving it open
+            # until that generation finishes on its own.
             active_view["token"] = object()
+            old_task = active_view["task"]
+            active_view["task"] = None
+            if old_task is not None and not old_task.done():
+                old_task.cancel()
             history[:] = messages
             render_history()
             update_context_usage()
@@ -1118,10 +1131,13 @@ def register_pages() -> None:
 
             view = make_stream_view()
 
-            updated: dict | None = None
-            error: str | None = None
-            try:
-                updated = await client.stream_message(
+            # Run as an explicit task (rather than a bare await) so a later
+            # set_history() — from switching to another chat, even back to
+            # this one — can cancel it outright and close its connection,
+            # instead of leaving it open until the response finishes on its
+            # own account. The generation itself is unaffected either way.
+            task = asyncio.create_task(
+                client.stream_message(
                     own_chat_id,
                     content,
                     view["on_delta"],
@@ -1129,6 +1145,15 @@ def register_pages() -> None:
                     view["on_tool_result"],
                     view["on_reasoning"],
                 )
+            )
+            active_view["task"] = task
+
+            updated: dict | None = None
+            error: str | None = None
+            try:
+                updated = await task
+            except asyncio.CancelledError:
+                return  # superseded — its connection is already closing
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
 
@@ -1188,10 +1213,11 @@ def register_pages() -> None:
                 render_history()
                 view["ensure_bubble"]()
 
-            updated: dict | None = None
-            error: str | None = None
-            try:
-                updated = await client.reattach_stream(
+            # See send() — an explicit task so a later set_history() (e.g.
+            # switching away again before this resolves) can cancel it and
+            # close its connection right away.
+            task = asyncio.create_task(
+                client.reattach_stream(
                     chat_id,
                     view["on_delta"],
                     view["on_tool_call"],
@@ -1199,6 +1225,15 @@ def register_pages() -> None:
                     view["on_reasoning"],
                     on_user_message,
                 )
+            )
+            active_view["task"] = task
+
+            updated: dict | None = None
+            error: str | None = None
+            try:
+                updated = await task
+            except asyncio.CancelledError:
+                return  # switched away again before this resolved
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
 
