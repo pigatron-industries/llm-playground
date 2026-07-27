@@ -1,4 +1,4 @@
-# LLM Test Harness
+# LLM Playground
 
 A simple test harness for local LLMs. NiceGUI chat frontend + FastAPI backend,
 running as a single process. Connects to any OpenAI-compatible API — LM Studio
