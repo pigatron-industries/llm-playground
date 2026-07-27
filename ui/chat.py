@@ -24,6 +24,7 @@ import httpx
 from nicegui import app, ui
 
 from . import client
+from .folder_picker import pick_folder
 
 
 def _error_detail(exc: Exception) -> str:
@@ -523,6 +524,11 @@ def register_pages() -> None:
             render_projects()
             await render_chat_list()
 
+        async def browse_folder(path_input) -> None:
+            chosen = await pick_folder(path_input.value)
+            if chosen is not None:
+                path_input.value = chosen
+
         def open_add_project_dialog() -> None:
             dialog = ui.dialog()
             with dialog, ui.card().classes("w-[360px]"):
@@ -530,9 +536,13 @@ def register_pages() -> None:
                 project_name_input = ui.input("Name", placeholder="My project").classes(
                     "w-full"
                 )
-                project_path_input = ui.input("Folder", placeholder="/path/to/project").classes(
-                    "w-full"
-                )
+                with ui.row().classes("w-full items-end gap-2"):
+                    project_path_input = ui.input(
+                        "Folder", placeholder="/path/to/project"
+                    ).classes("flex-grow")
+                    ui.button(icon="folder_open", on_click=lambda: browse_folder(project_path_input)).props(
+                        "flat dense round"
+                    ).tooltip("Browse for folder")
                 with ui.row().classes("w-full justify-end gap-2 mt-2"):
                     ui.button("Cancel", on_click=dialog.close).props("flat")
                     ui.button(
@@ -595,7 +605,13 @@ def register_pages() -> None:
             with dialog, ui.card().classes("w-[360px]"):
                 ui.label("Edit Project").classes("text-base font-medium")
                 project_name_input = ui.input("Name", value=project.get("name", "")).classes("w-full")
-                project_path_input = ui.input("Folder", value=project.get("path", "")).classes("w-full")
+                with ui.row().classes("w-full items-end gap-2"):
+                    project_path_input = ui.input(
+                        "Folder", value=project.get("path", "")
+                    ).classes("flex-grow")
+                    ui.button(icon="folder_open", on_click=lambda: browse_folder(project_path_input)).props(
+                        "flat dense round"
+                    ).tooltip("Browse for folder")
                 with ui.row().classes("w-full justify-end gap-2 mt-2"):
                     ui.button("Cancel", on_click=dialog.close).props("flat")
                     ui.button(
