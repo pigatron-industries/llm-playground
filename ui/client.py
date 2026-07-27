@@ -192,8 +192,16 @@ async def stream_message(
                     on_tool_result(event["name"], event["result"])
                 elif kind == "error":
                     raise RuntimeError(event["detail"])
-                elif kind == "done":
+                elif kind in ("done", "stopped"):
                     final_chat = event["chat"]
     if final_chat is None:
         raise RuntimeError("Stream ended without a completion event")
     return final_chat
+
+
+async def stop_message(chat_id: str) -> dict:
+    """Request to stop an in-flight message stream."""
+    async with _client(10) as client:
+        resp = await client.post(f"/chats/{chat_id}/stop")
+        resp.raise_for_status()
+        return resp.json()

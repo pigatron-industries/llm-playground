@@ -858,6 +858,9 @@ def register_pages() -> None:
             ui.notify("Title updated.", type="positive")
 
         # --- Bottom: input -----------------------------------------------
+        # Track whether a stream is currently in progress
+        is_streaming = {"value": False}
+        
         with ui.footer().classes("bg-white border-t p-2"):
             with ui.row().classes("w-full max-w-5xl mx-auto items-end gap-2 no-wrap"):
                 text_input = (
@@ -866,6 +869,8 @@ def register_pages() -> None:
                     .props("outlined autogrow dense")
                 )
                 send_button = ui.button(icon="send").props("round")
+                stop_button = ui.button(icon="stop").props("round unelevated")
+                stop_button.set_visibility(False)  # Hidden by default
         text_input.on("keyup", lambda: update_context_usage())
 
         async def send() -> None:
@@ -882,6 +887,8 @@ def register_pages() -> None:
             render_history()
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
+            is_streaming["value"] = True
+            stop_button.set_visibility(True)
             # This is the chat's first message — lock the workflow choice
             # immediately rather than waiting for the round trip to finish.
             apply_chat_to_sidebar()
@@ -978,6 +985,9 @@ def register_pages() -> None:
                 )
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
+            finally:
+                is_streaming["value"] = False
+                stop_button.set_visibility(False)
 
             send_button.enable()
             hide_spinner()
@@ -995,7 +1005,18 @@ def register_pages() -> None:
                 # still open — undo the lock from the optimistic append above.
                 apply_chat_to_sidebar()
 
+        async def stop() -> None:
+            """Stop the current stream and save the chat."""
+            if not state["chat_id"]:
+                return
+            try:
+                await client.stop_message(state["chat_id"])
+                ui.notify("Stream stopped.", type="info")
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not stop stream: {_error_detail(exc)}", type="negative")
+
         send_button.on("click", send)
+        stop_button.on("click", stop)
         text_input.on("keydown.enter", send)
 
         async def initial_load() -> None:

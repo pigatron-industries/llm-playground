@@ -28,6 +28,7 @@ from ..schemas import (
     WorkflowInfo,
 )
 from ..service import handle_send_message
+from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
 
@@ -209,6 +210,7 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
       {"type": "tool_call", "name": "...", "arguments": {...}}
       {"type": "tool_result", "name": "...", "result": "..."}
       {"type": "done",  "chat": {...}}                 final persisted chat
+      {"type": "stopped",  "chat": {...}}              user stopped stream
       {"type": "error", "detail": "..."}               provider failure (mid-stream)
 
     The user + assistant messages are persisted only after a successful
@@ -227,3 +229,15 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
             raise HTTPException(status_code=404, detail="Chat not found") from exc
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+@router.post("/chats/{chat_id}/stop")
+def stop_message(chat_id: str) -> dict:
+    """Stop an in-flight message stream. Returns success status."""
+    store = get_store()
+    chat = store.get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    
+    success = request_stream_stop(chat_id)
+    return {"stopped": success, "chat_id": chat_id}
