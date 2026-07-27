@@ -2,6 +2,7 @@
 
 import contextvars
 import os
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,6 +13,39 @@ from .registry import register_tool
 _current_project_root: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "current_project_root", default=None
 )
+
+# Patterns for hidden files and directories (regex patterns)
+HIDDEN_PATTERNS = [
+    r"^\.",  # Anything starting with a dot
+    r"^__pycache__$",  # Python cache directories
+]
+
+
+def should_skip_item(item_path: Path, include_hidden: bool, patterns: list[str] | None = None) -> bool:
+    """Check if item should be skipped based on hidden patterns.
+    
+    Args:
+        item_path: Path object of the item to check
+        include_hidden: Whether to include hidden files
+        patterns: List of regex patterns to match (defaults to HIDDEN_PATTERNS)
+    
+    Returns:
+        True if the item should be skipped, False otherwise
+    """
+    if include_hidden:
+        return False
+    
+    if patterns is None:
+        patterns = HIDDEN_PATTERNS
+    
+    name = item_path.name
+    
+    # Check against regex patterns
+    for pattern in patterns:
+        if re.match(pattern, name):
+            return True
+    
+    return False
 
 
 def set_project_root(root: Path | str) -> None:
@@ -49,18 +83,12 @@ def list_files_in_directory(path: str, recursive: bool = False, include_hidden: 
     if not target_path.is_dir():
         return f"Error: Path '{path}' is not a directory"
 
-    def should_skip(item_path: Path) -> bool:
-        """Check if item should be skipped (hidden files)."""
-        if include_hidden:
-            return False
-        return item_path.name.startswith(".")
-
     try:
         if not recursive:
             items = sorted(target_path.iterdir())
             lines = [f"Contents of {path}:"]
             for item in items:
-                if should_skip(item):
+                if should_skip_item(item, include_hidden):
                     continue
                 rel_path = item.relative_to(project_root)
                 if item.is_dir():
@@ -73,15 +101,14 @@ def list_files_in_directory(path: str, recursive: bool = False, include_hidden: 
             for root, dirs, files in os.walk(target_path):
                 for file in sorted(files):
                     file_path = Path(root) / file
-                    if should_skip(file_path):
+                    if should_skip_item(file_path, include_hidden):
                         continue
                     rel_path = file_path.relative_to(project_root)
                     size = file_path.stat().st_size
                     lines.append(f"[FILE] {rel_path} ({size} bytes)")
 
                 # Filter out hidden dirs for the next iteration
-                if not include_hidden:
-                    dirs[:] = [d for d in dirs if not d.startswith(".")]
+                dirs[:] = [d for d in dirs if not should_skip_item(Path(root) / d, include_hidden)]
 
                 for dir_name in sorted(dirs):
                     dir_path = Path(root) / dir_name
@@ -164,12 +191,6 @@ def search_in_files(path: str, pattern: str, recursive: bool = False, include_hi
 
     search_pattern = pattern if case_sensitive else pattern.lower()
 
-    def should_skip(item_path: Path) -> bool:
-        """Check if item should be skipped (hidden files)."""
-        if include_hidden:
-            return False
-        return item_path.name.startswith(".")
-
     def search_in_file(file_path: Path) -> list[str]:
         """Search for pattern in a single file and return matching lines."""
         matches = []
@@ -191,19 +212,18 @@ def search_in_files(path: str, pattern: str, recursive: bool = False, include_hi
         if not recursive:
             items = sorted(target_path.iterdir())
             for item in items:
-                if should_skip(item):
+                if should_skip_item(item, include_hidden):
                     continue
                 if item.is_file():
                     matches.extend(search_in_file(item))
         else:
             for root, dirs, files in os.walk(target_path):
                 # Filter out hidden dirs for the next iteration
-                if not include_hidden:
-                    dirs[:] = [d for d in dirs if not d.startswith(".")]
+                dirs[:] = [d for d in dirs if not should_skip_item(Path(root) / d, include_hidden)]
 
                 for file in sorted(files):
                     file_path = Path(root) / file
-                    if should_skip(file_path):
+                    if should_skip_item(file_path, include_hidden):
                         continue
                     matches.extend(search_in_file(file_path))
 
