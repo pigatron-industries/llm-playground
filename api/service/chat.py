@@ -4,6 +4,12 @@ This module owns the wire protocol (NDJSON events) and persistence, which are
 the same regardless of which workflow is running. The workflow itself (looked
 up from the chat) owns the model settings and the actual loop — see
 ``api.workflows``.
+
+Generation runs in a background task (see ``StreamState``/``start_stream``)
+independent of any single HTTP connection, so a client disconnecting (e.g.
+the UI navigating to another chat) doesn't cancel the in-flight response —
+any client can reattach via ``get_active_stream`` and replay/continue
+watching the same buffered events.
 """
 
 from __future__ import annotations
@@ -22,67 +28,112 @@ from ..workflows import WorkflowContext, get_workflow
 
 log = logging.getLogger("llm_harness.chat")
 
-# Global registry of active streams: chat_id -> asyncio.Event (set when stop is requested)
-_active_streams: dict[str, asyncio.Event] = {}
+
+class StreamState:
+    """Buffers NDJSON event lines produced by a background generation task
+    so any number of HTTP requests can subscribe/reattach and replay from
+    wherever they left off, independent of the task's own lifetime."""
+
+    def __init__(self) -> None:
+        self.cancel_event = asyncio.Event()
+        self.condition = asyncio.Condition()
+        self.events: list[str] = []
+        self.done = False
+        self.task: asyncio.Task | None = None
+
+    async def append(self, line: str) -> None:
+        async with self.condition:
+            self.events.append(line)
+            self.condition.notify_all()
+
+    async def finish(self) -> None:
+        async with self.condition:
+            self.done = True
+            self.condition.notify_all()
+
+    async def subscribe(self) -> AsyncIterator[str]:
+        """Yield every event from the start, then keep waiting for new ones
+        until the stream finishes. Safe to call more than once (e.g. the
+        original requester plus a later reattach) — each subscriber tracks
+        its own read position over the same shared buffer."""
+        idx = 0
+        while True:
+            async with self.condition:
+                while idx >= len(self.events) and not self.done:
+                    await self.condition.wait()
+                pending = self.events[idx:]
+                idx = len(self.events)
+                finished = self.done
+            for line in pending:
+                yield line
+            if finished:
+                return
 
 
-def register_stream(chat_id: str) -> asyncio.Event:
-    """Register a stream and return its cancellation event."""
-    cancel_event = asyncio.Event()
-    _active_streams[chat_id] = cancel_event
-    return cancel_event
+# Global registry of active streams: chat_id -> StreamState
+_active_streams: dict[str, StreamState] = {}
 
 
-def unregister_stream(chat_id: str) -> None:
-    """Unregister a stream (called after streaming completes)."""
-    _active_streams.pop(chat_id, None)
-
-
-def is_stream_cancelled(chat_id: str) -> bool:
-    """Check if a stream has been cancelled."""
-    cancel_event = _active_streams.get(chat_id)
-    return cancel_event is not None and cancel_event.is_set()
+def get_active_stream(chat_id: str) -> StreamState | None:
+    """Return the in-progress stream for a chat, if any — used to reattach
+    a UI that switched away and back while the response was still generating."""
+    return _active_streams.get(chat_id)
 
 
 def request_stream_stop(chat_id: str) -> bool:
     """Request a stream to stop. Returns True if the stream was found and stopping."""
-    cancel_event = _active_streams.get(chat_id)
-    if cancel_event is not None:
-        cancel_event.set()
+    state = _active_streams.get(chat_id)
+    if state is not None:
+        state.cancel_event.set()
         return True
     return False
 
 
-async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIterator[str]:
-    """Handle chat message submission and stream the assistant response."""
+def start_stream(chat_id: str, req: SendMessageRequest) -> StreamState:
+    """Start generating the assistant reply in a background task and return
+    immediately. The task keeps running (and persists its result) even if
+    every subscriber disconnects — callers consume it via ``state.subscribe()``."""
+    state = StreamState()
+    # The user's message isn't persisted until the turn completes (see
+    # _run_stream), so a client reattaching mid-stream has no other way to
+    # learn what was actually asked — seed it as the first buffered event.
+    state.events.append(json.dumps({"type": "user_message", "content": req.content}) + "\n")
+    _active_streams[chat_id] = state
+    state.task = asyncio.create_task(_run_stream(chat_id, req, state))
+    return state
+
+
+async def _run_stream(chat_id: str, req: SendMessageRequest, state: StreamState) -> None:
+    """Run the workflow loop to completion, appending wire-protocol events to
+    ``state`` as they're produced, then persist and unregister."""
     store = get_store()
     chat = store.get(chat_id)
     if chat is None:
-        raise KeyError(chat_id)
+        await state.append(json.dumps({"type": "error", "detail": "Chat not found"}) + "\n")
+        await state.finish()
+        _active_streams.pop(chat_id, None)
+        return
 
     workflow = get_workflow(chat.workflow_id)
     user_msg = Message(role="user", content=req.content)
     ctx = WorkflowContext(chat=chat, user_message=user_msg)
 
-    # Register this stream for potential cancellation
-    cancel_event = register_stream(chat_id)
-
     produced: list[Message] = []
     stopped = False
+    failed = False
     try:
         async for event in workflow.run(ctx):
-            # Check if stream has been cancelled
-            if cancel_event.is_set():
+            if state.cancel_event.is_set():
                 log.info("Stream cancelled for chat %s", chat_id)
                 stopped = True
                 break
 
             if isinstance(event, TextDelta):
-                yield json.dumps({"type": "delta", "content": event.content}) + "\n"
+                await state.append(json.dumps({"type": "delta", "content": event.content}) + "\n")
             if isinstance(event, ReasoningDelta):
-                yield json.dumps({"type": "delta", "content": event.content}) + "\n"
+                await state.append(json.dumps({"type": "delta", "content": event.content}) + "\n")
             elif isinstance(event, ToolCallEvent):
-                yield (
+                await state.append(
                     json.dumps(
                         {
                             "type": "tool_call",
@@ -93,7 +144,7 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
                     + "\n"
                 )
             elif isinstance(event, ToolResultEvent):
-                yield (
+                await state.append(
                     json.dumps(
                         {
                             "type": "tool_result",
@@ -107,22 +158,37 @@ async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIte
                 produced = event.messages
     except APIConnectionError as exc:
         log.exception("Could not reach provider for chat %s", chat_id)
-        yield json.dumps({"type": "error", "detail": f"Could not reach provider: {exc}"}) + "\n"
-        return
+        await state.append(
+            json.dumps({"type": "error", "detail": f"Could not reach provider: {exc}"}) + "\n"
+        )
+        failed = True
     except Exception as exc:  # noqa: BLE001 — any provider error mid-stream
         log.exception("Provider error mid-stream for chat %s", chat_id)
-        yield json.dumps({"type": "error", "detail": str(exc)}) + "\n"
-        return
-    finally:
-        unregister_stream(chat_id)
+        await state.append(json.dumps({"type": "error", "detail": str(exc)}) + "\n")
+        failed = True
 
-    store.add_message(chat_id, user_msg)
-    for message in produced:
-        store.add_message(chat_id, message)
-    updated = store.get(chat_id)
-    
-    # If stream was stopped by user, send a "stopped" event instead of "done"
-    if stopped:
-        yield json.dumps({"type": "stopped", "chat": updated.model_dump(mode="json")}) + "\n"
-    else:
-        yield json.dumps({"type": "done", "chat": updated.model_dump(mode="json")}) + "\n"
+    if not failed:
+        store.add_message(chat_id, user_msg)
+        for message in produced:
+            store.add_message(chat_id, message)
+        updated = store.get(chat_id)
+
+        # If stream was stopped by user, send a "stopped" event instead of "done"
+        if stopped:
+            await state.append(json.dumps({"type": "stopped", "chat": updated.model_dump(mode="json")}) + "\n")
+        else:
+            await state.append(json.dumps({"type": "done", "chat": updated.model_dump(mode="json")}) + "\n")
+
+    await state.finish()
+    _active_streams.pop(chat_id, None)
+
+
+async def handle_send_message(chat_id: str, req: SendMessageRequest) -> AsyncIterator[str]:
+    """Start a new generation for ``chat_id`` and stream its events as they
+    arrive. If the caller disconnects partway through, generation keeps
+    running in the background — see ``start_stream``/``StreamState``."""
+    if get_store().get(chat_id) is None:
+        raise KeyError(chat_id)
+    state = start_stream(chat_id, req)
+    async for line in state.subscribe():
+        yield line

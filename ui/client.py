@@ -165,6 +165,40 @@ async def delete_chat(chat_id: str) -> None:
         resp.raise_for_status()
 
 
+async def _consume_ndjson(
+    resp: httpx.Response,
+    on_delta: Callable[[str], None],
+    on_tool_call: Callable[[str, dict], None] | None,
+    on_tool_result: Callable[[str, str], None] | None,
+    on_reasoning: Callable[[str], None] | None,
+    on_user_message: Callable[[str], None] | None = None,
+) -> dict | None:
+    """Drive callbacks from an open NDJSON response, returning the final
+    persisted chat once a ``done``/``stopped`` event arrives (or ``None`` if
+    the stream ended without one)."""
+    final_chat: dict | None = None
+    async for line in resp.aiter_lines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        kind = event.get("type")
+        if kind == "delta":
+            on_delta(event["content"])
+        elif kind == "reasoning" and on_reasoning is not None:
+            on_reasoning(event["content"])
+        elif kind == "tool_call" and on_tool_call is not None:
+            on_tool_call(event["name"], event.get("arguments", {}))
+        elif kind == "tool_result" and on_tool_result is not None:
+            on_tool_result(event["name"], event["result"])
+        elif kind == "user_message" and on_user_message is not None:
+            on_user_message(event["content"])
+        elif kind == "error":
+            raise RuntimeError(event["detail"])
+        elif kind in ("done", "stopped"):
+            final_chat = event["chat"]
+    return final_chat
+
+
 async def stream_message(
     chat_id: str,
     content: str,
@@ -176,10 +210,12 @@ async def stream_message(
     """Stream a message reply, calling ``on_delta`` per chunk (and
     ``on_reasoning`` per chunk of the model's reasoning trace, if the
     provider/model emits one — most don't, so it may never fire).
-    ...
+
+    Generation runs server-side independent of this connection — if it
+    drops (e.g. the caller navigates away), the response keeps generating
+    and can be picked back up with ``reattach_stream``.
     """
     payload = {"content": content}
-    final_chat: dict | None = None
     async with _client(600) as client:
         async with client.stream(
             "POST", f"/chats/{chat_id}/messages", json=payload
@@ -187,23 +223,42 @@ async def stream_message(
             if resp.status_code >= 400:
                 await resp.aread()
                 resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                kind = event.get("type")
-                if kind == "delta":
-                    on_delta(event["content"])
-                elif kind == "reasoning" and on_reasoning is not None:
-                    on_reasoning(event["content"])
-                elif kind == "tool_call" and on_tool_call is not None:
-                    on_tool_call(event["name"], event.get("arguments", {}))
-                elif kind == "tool_result" and on_tool_result is not None:
-                    on_tool_result(event["name"], event["result"])
-                elif kind == "error":
-                    raise RuntimeError(event["detail"])
-                elif kind in ("done", "stopped"):
-                    final_chat = event["chat"]
+            final_chat = await _consume_ndjson(
+                resp, on_delta, on_tool_call, on_tool_result, on_reasoning
+            )
+    if final_chat is None:
+        raise RuntimeError("Stream ended without a completion event")
+    return final_chat
+
+
+async def reattach_stream(
+    chat_id: str,
+    on_delta: Callable[[str], None],
+    on_tool_call: Callable[[str, dict], None] | None = None,
+    on_tool_result: Callable[[str, str], None] | None = None,
+    on_reasoning: Callable[[str], None] | None = None,
+    on_user_message: Callable[[str], None] | None = None,
+) -> dict | None:
+    """Reattach to a message stream already in progress for ``chat_id`` —
+    e.g. the UI switched to another chat and back while a response was
+    still generating. Replays whatever's already been produced through the
+    callbacks (``on_user_message`` fires first, with the not-yet-persisted
+    question that started this turn), then keeps streaming live.
+
+    Returns the final chat once complete, or ``None`` if nothing is
+    currently streaming for this chat (nothing to reattach to).
+    """
+    async with _client(600) as client:
+        async with client.stream("GET", f"/chats/{chat_id}/stream") as resp:
+            if resp.status_code == 404:
+                await resp.aread()
+                return None
+            if resp.status_code >= 400:
+                await resp.aread()
+                resp.raise_for_status()
+            final_chat = await _consume_ndjson(
+                resp, on_delta, on_tool_call, on_tool_result, on_reasoning, on_user_message
+            )
     if final_chat is None:
         raise RuntimeError("Stream ended without a completion event")
     return final_chat

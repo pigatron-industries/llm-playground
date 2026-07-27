@@ -27,7 +27,7 @@ from ..schemas import (
     UpdateChatRequest,
     WorkflowInfo,
 )
-from ..service import handle_send_message
+from ..service import get_active_stream, handle_send_message
 from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
@@ -231,6 +231,22 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
             raise HTTPException(status_code=404, detail="Chat not found") from exc
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+@router.get("/chats/{chat_id}/stream")
+async def reattach_stream(chat_id: str) -> StreamingResponse:
+    """Reattach to a message stream that's already in progress for this
+    chat, replaying whatever's been produced so far and then continuing to
+    stream live — for a UI that navigated away mid-response and back.
+
+    404 if nothing is currently streaming for this chat (the caller should
+    just show the persisted chat in that case).
+    """
+    state = get_active_stream(chat_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="No stream in progress for this chat")
+
+    return StreamingResponse(state.subscribe(), media_type="application/x-ndjson")
 
 
 @router.post("/chats/{chat_id}/stop")

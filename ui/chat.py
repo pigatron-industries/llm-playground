@@ -248,6 +248,14 @@ def register_pages() -> None:
         # the chat currently open.
         history: list[dict] = []
         workflows: list[dict] = []
+        # Identifies whichever live-stream view (see make_stream_view) is
+        # currently allowed to render into messages_col. Reset by every
+        # set_history() call — i.e. every time we switch to showing a
+        # different (or freshly reloaded) chat — so a send()/reattach task
+        # left over from before a chat switch can never write into the DOM
+        # again, even if the user navigates back to the very same chat
+        # (which mints a fresh token of its own via reattach_if_streaming).
+        active_view: dict = {"token": None}
         state: dict = {
             "chat_id": None,
             "project_id": None,
@@ -808,6 +816,10 @@ def register_pages() -> None:
                         ).props("flat dense round size=sm").classes("text-gray-400")
 
         def set_history(messages: list[dict]) -> None:
+            # We're switching to a fixed, persisted message list — retire
+            # whichever live-stream view (if any) was previously allowed to
+            # render, so it can't write stray output into this new view.
+            active_view["token"] = object()
             history[:] = messages
             render_history()
             update_context_usage()
@@ -822,6 +834,12 @@ def register_pages() -> None:
             set_history(chat["messages"])
             apply_chat_to_sidebar()
             await refresh_context_estimate()
+            # Refresh the sidebar's highlight now, before reattaching — if
+            # chat_id turns out to still be streaming, reattach_if_streaming
+            # doesn't return until that response finishes, which would
+            # otherwise leave the old chat highlighted the whole time.
+            await render_chat_list()
+            await reattach_if_streaming(chat_id)
 
         def clear_chat() -> None:
             """Drop back to the no-chat-selected state (e.g. after deleting the
@@ -947,37 +965,41 @@ def register_pages() -> None:
                 stop_button.set_visibility(False)  # Hidden by default
         text_input.on("keyup", lambda: update_context_usage())
 
-        async def send() -> None:
-            content = (text_input.value or "").strip()
-            if not content:
-                return
-            if not state["chat_id"]:
-                ui.notify("Create a chat first.", type="warning")
-                return
+        def make_stream_view(lazy: bool = False) -> dict:
+            """Build a fresh "live assistant response" rendering scope: an
+            open bubble with its own spinner, plus the on_delta/on_reasoning/
+            on_tool_call/on_tool_result callbacks that drive it — shared
+            between sending a new message and reattaching to one that's
+            already streaming in the background (e.g. after switching chats
+            and back mid-response).
 
-            text_input.value = ""
-            # Optimistically show the user's message.
-            history.append({"role": "user", "content": content})
-            render_history()
-            messages_area.scroll_to(percent=1.0)
-            send_button.disable()
-            is_streaming["value"] = True
-            stop_button.set_visibility(True)
-            # This is the chat's first message — lock the workflow choice
-            # immediately rather than waiting for the round trip to finish.
-            apply_chat_to_sidebar()
+            Every callback is guarded against ``active_view["token"]`` —
+            captured once, up front, as this view's own token. If the user
+            navigates away (which mints a new token via set_history) the
+            callbacks silently stop touching the DOM, even if the background
+            send()/reattach task they belong to keeps running — and even if
+            the user later comes right back to this same chat, since that
+            re-entry mints its own fresh token via a new reattach rather than
+            reviving this one. Without this, a stale view can go on writing
+            into whatever now-unrelated DOM the current view has built,
+            producing duplicate bubbles.
 
-            # Streaming render state. A fresh "Assistant" bubble (with its own
-            # spinner) is opened whenever the model still owes us output —
-            # initially, and again after every tool result — so the live view
-            # mirrors how a finished turn is persisted (one bubble per
-            # assistant/tool step, see render_history) and there's always
-            # visible feedback while waiting on the next round from the
-            # provider. Bubbles are created inside an explicit
-            # ``with messages_col:`` each time because these callbacks fire
-            # from async event handling, well after any earlier ``with``
-            # block has closed — creating elements without that explicit
-            # context would silently attach them to the wrong container.
+            A fresh bubble is opened whenever the model still owes us output —
+            initially, and again after every tool result — so the live view
+            mirrors how a finished turn is persisted (one bubble per
+            assistant/tool step, see render_history) and there's always
+            visible feedback while waiting on the next round from the
+            provider. Bubbles are created inside an explicit
+            ``with messages_col:`` each time because these callbacks fire
+            from async event handling, well after any earlier ``with`` block
+            has closed — creating elements without that explicit context
+            would silently attach them to the wrong container.
+
+            With ``lazy=True`` no bubble is opened until the first event
+            actually arrives — used for reattaching, where there may turn out
+            to be nothing currently streaming at all.
+            """
+            my_token = active_view["token"]
             live: dict = {
                 "bubble": None, "spinner": None, "md": None, "text": "",
                 "reasoning_exp": None, "reasoning_md": None, "reasoning_text": "",
@@ -1003,20 +1025,31 @@ def register_pages() -> None:
                 live.update(bubble=bubble, spinner=spinner, md=md, text="")
                 messages_area.scroll_to(percent=1.0)
 
+            def ensure_bubble() -> None:
+                if live["bubble"] is None:
+                    open_assistant_bubble()
+
             def hide_spinner() -> None:
                 if live["spinner"] is not None:
                     live["spinner"].delete()
                     live["spinner"] = None
 
-            open_assistant_bubble()
+            if not lazy:
+                open_assistant_bubble()
 
             def on_delta(chunk: str) -> None:
+                if active_view["token"] is not my_token:
+                    return
+                ensure_bubble()
                 hide_spinner()
                 live["text"] += chunk
                 live["md"].set_content(live["text"])
                 messages_area.scroll_to(percent=1.0)
 
             def on_reasoning(chunk: str) -> None:
+                if active_view["token"] is not my_token:
+                    return
+                ensure_bubble()
                 hide_spinner()
                 exp = live["reasoning_exp"]
                 if exp is not None and not exp.visible:
@@ -1027,6 +1060,9 @@ def register_pages() -> None:
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_call(name: str, arguments: dict) -> None:
+                if active_view["token"] is not my_token:
+                    return
+                ensure_bubble()
                 hide_spinner()
                 args_str = "\n".join(f"  {key}={value}" for key, value in arguments.items())
                 live["text"] += f"**Tool call:**\n```\n{name}\n{args_str}\n```"
@@ -1034,6 +1070,8 @@ def register_pages() -> None:
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
+                if active_view["token"] is not my_token:
+                    return
                 with messages_col:
                     with _message_bubble("Tool", is_user=False):
                         with ui.expansion("Tool Result", icon="build").classes("w-full"):
@@ -1046,25 +1084,67 @@ def register_pages() -> None:
                 # the wait is never silent.
                 open_assistant_bubble()
 
+            return {
+                "token": my_token,
+                "on_delta": on_delta,
+                "on_tool_call": on_tool_call,
+                "on_tool_result": on_tool_result,
+                "on_reasoning": on_reasoning,
+                "hide_spinner": hide_spinner,
+                "ensure_bubble": ensure_bubble,
+            }
+
+        async def send() -> None:
+            content = (text_input.value or "").strip()
+            if not content:
+                return
+            if not state["chat_id"]:
+                ui.notify("Create a chat first.", type="warning")
+                return
+
+            own_chat_id = state["chat_id"]
+
+            text_input.value = ""
+            # Optimistically show the user's message.
+            history.append({"role": "user", "content": content})
+            render_history()
+            messages_area.scroll_to(percent=1.0)
+            send_button.disable()
+            is_streaming["value"] = True
+            stop_button.set_visibility(True)
+            # This is the chat's first message — lock the workflow choice
+            # immediately rather than waiting for the round trip to finish.
+            apply_chat_to_sidebar()
+
+            view = make_stream_view()
+
             updated: dict | None = None
             error: str | None = None
             try:
                 updated = await client.stream_message(
-                    state["chat_id"],
+                    own_chat_id,
                     content,
-                    on_delta,
-                    on_tool_call,
-                    on_tool_result,
-                    on_reasoning
+                    view["on_delta"],
+                    view["on_tool_call"],
+                    view["on_tool_result"],
+                    view["on_reasoning"],
                 )
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
-            finally:
-                is_streaming["value"] = False
-                stop_button.set_visibility(False)
 
+            if active_view["token"] is not view["token"]:
+                # Superseded by a chat switch (possibly back to this very
+                # chat, which mints its own fresh reattach view — see
+                # make_stream_view). The response itself wasn't lost: it kept
+                # generating server-side and is already persisted by now, so
+                # just keep the sidebar (title/ordering) in sync.
+                await render_chat_list()
+                return
+
+            is_streaming["value"] = False
+            stop_button.set_visibility(False)
             send_button.enable()
-            hide_spinner()
+            view["hide_spinner"]()
             if updated is not None:
                 # Re-sync from the server (source of truth); this also replaces
                 # the streaming bubble when render_history() clears the column.
@@ -1078,6 +1158,64 @@ def register_pages() -> None:
                 # If that was a failed first message, the workflow choice is
                 # still open — undo the lock from the optimistic append above.
                 apply_chat_to_sidebar()
+
+        async def reattach_if_streaming(chat_id: str) -> None:
+            """If ``chat_id`` has a response still generating in the
+            background (we switched away mid-stream and back, or just
+            reloaded the page), pick the live view back up instead of
+            leaving the user looking at the not-yet-persisted history.
+
+            Called right after set_history(), so ``active_view["token"]`` is
+            already the fresh token for this chat view — captured by
+            make_stream_view() below and reused for the user_message guard.
+            """
+            view = make_stream_view(lazy=True)
+            send_button.disable()
+            is_streaming["value"] = True
+            stop_button.set_visibility(True)
+
+            def on_user_message(question: str) -> None:
+                if active_view["token"] is not view["token"]:
+                    return
+                # The turn that's still generating hasn't been persisted yet
+                # (that only happens once it completes), so the question that
+                # started it is otherwise invisible until then — show it
+                # optimistically, same as send() does for a message we sent
+                # ourselves. Also our first signal that a stream really is
+                # active, so bring up the assistant bubble+spinner now rather
+                # than waiting for the first delta.
+                history.append({"role": "user", "content": question})
+                render_history()
+                view["ensure_bubble"]()
+
+            updated: dict | None = None
+            error: str | None = None
+            try:
+                updated = await client.reattach_stream(
+                    chat_id,
+                    view["on_delta"],
+                    view["on_tool_call"],
+                    view["on_tool_result"],
+                    view["on_reasoning"],
+                    on_user_message,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error = _error_detail(exc)
+
+            if active_view["token"] is not view["token"]:
+                return  # switched away again before this resolved
+
+            is_streaming["value"] = False
+            stop_button.set_visibility(False)
+            send_button.enable()
+            if updated is None and error is None:
+                return  # nothing was streaming — the bubble was never opened
+            if updated is not None:
+                set_history(updated["messages"])
+                await render_chat_list()
+            else:
+                ui.notify(f"Chat failed: {error}", type="negative", multi_line=True)
+                render_history()
 
         async def stop() -> None:
             """Stop the current stream and save the chat."""
