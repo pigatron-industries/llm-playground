@@ -137,3 +137,42 @@ def append_file(path: str, text: str) -> str:
         return f"Error: Permission denied writing to '{path}'"
     except Exception as e:
         return f"Error: Failed to append to '{path}': {e}"
+
+
+class CreateDirectoryArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(description="Directory path relative to project root (e.g., './' or 'api/tools')")
+
+
+@register_tool(CreateDirectoryArgs, description="Create a directory within the project. Creates parent directories if they don't exist.", category="Edit")
+def create_directory(path: str) -> str:
+    # Get the current project root from context, fallback to hardcoded default
+    project_root = _current_project_root.get()
+    if project_root is None:
+        project_root = Path(__file__).parent.parent.parent
+
+    # Normalize and resolve the path
+    target_path = (project_root / path).resolve()
+
+    # Security check: ensure the resolved path is within the project root
+    try:
+        target_path.relative_to(project_root)
+    except ValueError:
+        return f"Error: Path '{path}' is outside the project root"
+
+    # Check if the path already exists
+    if target_path.exists():
+        if target_path.is_dir():
+            return f"Directory '{path}' already exists"
+        else:
+            return f"Error: Path '{path}' already exists and is not a directory"
+
+    # Create the directory
+    try:
+        target_path.mkdir(parents=True, exist_ok=True)
+        return f"Successfully created directory '{path}'"
+    except PermissionError:
+        return f"Error: Permission denied creating directory '{path}'"
+    except Exception as e:
+        return f"Error: Failed to create directory '{path}': {e}"
