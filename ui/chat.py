@@ -344,6 +344,12 @@ def register_pages() -> None:
                     "flat dense round size=sm"
                 )
             chat_list = ui.column().classes("w-full gap-1")
+            # chat_id -> spinner element for that row, so the periodic
+            # is_streaming poll (see poll_streaming_indicators) can just
+            # toggle visibility in place rather than tearing down and
+            # rebuilding the whole list every few seconds — doing that while
+            # e.g. an edit-title dialog is open was closing the dialog.
+            streaming_spinners: dict[str, Any] = {}
 
         # --- Right sidebar: workflow settings ------------------------------
         with ui.right_drawer(bordered=True).classes("bg-gray-50").props("width=280"):
@@ -801,6 +807,7 @@ def register_pages() -> None:
             except Exception:  # noqa: BLE001
                 return
             chat_list.clear()
+            streaming_spinners.clear()
             with chat_list:
                 if not chats:
                     ui.label("No chats yet").classes("text-xs text-gray-400")
@@ -815,12 +822,55 @@ def register_pages() -> None:
                         ).props("flat dense no-caps align=left").classes(
                             "flex-grow min-w-0 justify-start normal-case ellipsis"
                         )
+                        spinner = ui.spinner(size="1em", color="primary").classes("shrink-0 mr-1")
+                        spinner.tooltip("Generating…")
+                        spinner.set_visibility(bool(c.get("is_streaming")))
+                        streaming_spinners[c["id"]] = spinner
+                        if c.get("is_streaming"):
+                            # A stream is already going (e.g. discovered on
+                            # initial page load) — make sure the poll is
+                            # running so this spinner clears once it's done.
+                            _wake_stream_poll()
                         ui.button(
                             icon="edit", on_click=lambda cid=c["id"], title=c["title"]: edit_chat_title(cid, title)
                         ).props("flat dense round size=sm").classes("text-gray-400").tooltip("Edit title")
                         ui.button(
                             icon="delete", on_click=lambda cid=c["id"]: remove_chat(cid)
                         ).props("flat dense round size=sm").classes("text-gray-400")
+
+        async def poll_streaming_indicators() -> None:
+            """Refresh just the is_streaming spinners in place, without
+            touching the rest of the DOM — a full render_chat_list() rebuild
+            on a timer was closing any dialog the user had open (e.g. edit
+            title). Chats added/removed elsewhere are picked up next time
+            something already calls render_chat_list().
+
+            Stops the polling timer itself once nothing is streaming, so the
+            app goes back to making zero background requests until something
+            starts a stream again (see ``_wake_stream_poll``)."""
+            if not streaming_spinners:
+                stream_poll_timer.deactivate()
+                return
+            try:
+                chats = await client.list_chats(state["project_id"])
+            except Exception:  # noqa: BLE001
+                return
+            any_streaming = False
+            for c in chats:
+                if c.get("is_streaming"):
+                    any_streaming = True
+                spinner = streaming_spinners.get(c["id"])
+                if spinner is not None:
+                    spinner.set_visibility(bool(c.get("is_streaming")))
+            if not any_streaming:
+                stream_poll_timer.deactivate()
+
+        def _wake_stream_poll() -> None:
+            """Turn the polling timer back on — called whenever we know a
+            stream just started (our own send()/reattach), so the row
+            spinner elsewhere in the list stays in sync without polling at
+            all while nothing is generating."""
+            stream_poll_timer.activate()
 
         def set_history(messages: list[dict]) -> None:
             # We're switching to a fixed, persisted message list — retire
@@ -1125,6 +1175,7 @@ def register_pages() -> None:
             send_button.disable()
             is_streaming["value"] = True
             stop_button.set_visibility(True)
+            _wake_stream_poll()
             # This is the chat's first message — lock the workflow choice
             # immediately rather than waiting for the round trip to finish.
             apply_chat_to_sidebar()
@@ -1212,6 +1263,7 @@ def register_pages() -> None:
                 history.append({"role": "user", "content": question})
                 render_history()
                 view["ensure_bubble"]()
+                _wake_stream_poll()
 
             # See send() — an explicit task so a later set_history() (e.g.
             # switching away again before this resolves) can cancel it and
@@ -1302,3 +1354,13 @@ def register_pages() -> None:
 
         # NiceGUI must send the page within ~3s; defer slow provider/chat IO.
         ui.timer(0.0, initial_load, once=True)
+        # Chats other than the one currently open can be streaming in the
+        # background (see StreamState) — poll periodically so their spinner
+        # (is_streaming) appears/disappears without needing a switch to that
+        # chat and back. Only touches existing spinner elements in place
+        # (see poll_streaming_indicators) — never rebuilds the list — so it
+        # can't interrupt an open dialog. Starts off and is woken (see
+        # _wake_stream_poll) only once something is actually streaming, then
+        # switches itself back off once nothing is — so this makes zero
+        # background requests the rest of the time.
+        stream_poll_timer = ui.timer(3.0, poll_streaming_indicators, active=False)

@@ -80,6 +80,13 @@ def get_active_stream(chat_id: str) -> StreamState | None:
     return _active_streams.get(chat_id)
 
 
+def list_active_stream_ids() -> set[str]:
+    """Ids of every chat currently generating in the background — used to
+    flag them in the chat list (e.g. a spinner next to the title) even while
+    the user is looking at a different chat."""
+    return set(_active_streams.keys())
+
+
 def request_stream_stop(chat_id: str) -> bool:
     """Request a stream to stop. Returns True if the stream was found and stopping."""
     state = _active_streams.get(chat_id)

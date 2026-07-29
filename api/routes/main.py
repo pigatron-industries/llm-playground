@@ -27,7 +27,7 @@ from ..schemas import (
     UpdateChatRequest,
     WorkflowInfo,
 )
-from ..service import get_active_stream, handle_send_message
+from ..service import get_active_stream, handle_send_message, list_active_stream_ids
 from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
@@ -170,7 +170,11 @@ def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
 
 @router.get("/chats", response_model=list[ChatSummary])
 def list_chats(project_id: str | None = None) -> list[ChatSummary]:
-    return get_store().list(project_id=project_id)
+    chats = get_store().list(project_id=project_id)
+    active_ids = list_active_stream_ids()
+    for chat in chats:
+        chat.is_streaming = chat.id in active_ids
+    return chats
 
 
 @router.get("/chats/{chat_id}", response_model=Chat)

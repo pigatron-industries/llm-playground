@@ -80,6 +80,9 @@ class ChatSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     message_count: int
+    # True while a response is generating in the background for this chat —
+    # set by the route from the live stream registry, not stored on disk.
+    is_streaming: bool = False
 
 
 class CreateChatRequest(BaseModel):
