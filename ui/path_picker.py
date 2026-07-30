@@ -33,6 +33,15 @@ def _normalize_extensions(extensions: Sequence[str] | None) -> set[str] | None:
     return {ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extensions}
 
 
+def _volumes() -> list[Path]:
+    volumes = Path("/Volumes")
+    try:
+        entries = [e for e in volumes.iterdir() if e.is_dir()]
+    except (PermissionError, OSError):
+        return []
+    return sorted(entries, key=lambda e: e.name.lower())
+
+
 def _entries(path: Path, *, include_files: bool, extensions: set[str] | None) -> tuple[list[Path], list[Path]]:
     try:
         children = [e for e in path.iterdir() if not e.name.startswith(".")]
@@ -67,6 +76,17 @@ async def pick_path(
         ui.label("Choose a folder" if mode == "folder" else "Choose a file").classes(
             "text-base font-medium"
         )
+        volumes = _volumes()
+        if volumes:
+            with ui.row().classes("w-full gap-1 mt-1"):
+                for volume in volumes:
+                    with ui.column().classes("items-center gap-0 w-14"):
+                        ui.button(icon="storage", on_click=lambda v=volume: navigate(v)).props(
+                            "flat dense round size=sm"
+                        ).tooltip(volume.name)
+                        ui.label(volume.name).classes(
+                            "text-[10px] text-gray-500 w-full text-center truncate"
+                        ).tooltip(volume.name)
         path_label = ui.label().classes("text-xs text-gray-500 break-all")
         list_container = ui.column().classes("w-full max-h-80 overflow-y-auto gap-0 mt-1")
 
