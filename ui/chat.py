@@ -25,7 +25,7 @@ import httpx
 from nicegui import app, ui
 
 from . import client
-from .folder_picker import pick_folder
+from .path_picker import pick_folder
 
 
 def _error_detail(exc: Exception) -> str:
