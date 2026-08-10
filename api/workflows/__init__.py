@@ -12,6 +12,7 @@ from __future__ import annotations
 from . import project_context as _project_context  # noqa: F401 - registration side effect
 from . import simple_chat as _simple_chat  # noqa: F401 - registration side effect
 from . import project_tools as _project_tools  # noqa: F401 - registration side effect
+from . import world as _world  # noqa: F401 - registration side effect
 from .base import Workflow, WorkflowContext
 from .registry import DEFAULT_WORKFLOW_ID, get_workflow, list_workflows
 
