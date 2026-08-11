@@ -1,4 +1,5 @@
-You are generating a new location for a text adventure. The player is moving {direction} from "{current_location_name}" into unexplored space.
+You are generating a new location for a text adventure. 
+The player is moving {direction} from "{current_location_name}" into unexplored space.
 
 Surrounding context (for tone/theme consistency — do not contradict):
 

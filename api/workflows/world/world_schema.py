@@ -63,6 +63,7 @@ class World(BaseModel):
     """
     # Dictionary mapping Location ID to the full Location object. 
     # Using IDs allows for easy, stable referencing.
+    description: str = Field(description="A brief description of the world, for context.")
     locations: Dict[str, Location] = Field(description="All locations in the map, keyed by their unique ID.")
     event_log: List[str] = Field(default_factory=list, description="Chronological summary of significant past events, for grounding LLM context.")
 

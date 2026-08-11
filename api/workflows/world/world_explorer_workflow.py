@@ -16,11 +16,12 @@ from ..base import Workflow, WorkflowContext
 from ..common import history_for_model
 from ..registry import register_workflow
 from .world_schema import Character, Location, World
+from .world_tools import set_current_world
 
 TOOL_TYPES = ["Math", "World"]
 
 
-_WORLD_CACHE: dict[str, tuple[Path, float, World]] = {}
+_WORLD_CACHE: dict[str, tuple[Path, World]] = {}
 
 
 def _slugify_world_name(name: str) -> str:
@@ -32,50 +33,136 @@ def _default_world_path(world_name: str) -> Path:
     return get_chats_dir().parent / "worlds" / f"{_slugify_world_name(world_name)}.json"
 
 
-def _new_world(world_name: str, world_description: str) -> World:
-    start_location = Location(
-        id="start",
-        footprint=[(0, 0)],
-        name="Trailhead",
-        description=(
-            world_description.strip()
-            or "You stand at a quiet trailhead where worn stone markers point into unknown lands."
-        ),
+def _render_world_story(world: World) -> str:
+    story_path = Path(__file__).resolve().parent / "templates" / "world_story.md"
+    template = story_path.read_text(encoding="utf-8")
+
+    location = world.locations.get(world.player.location_id)
+    location_name = location.name if location is not None else "Unknown"
+    location_description = location.description if location is not None else ""
+    location_state = location.state if location is not None else {}
+
+    exits_list = "\n".join(
+        f"{direction} -> {exit.description}: leads to '{exit.destination_id}'"
+        for direction, exit in (location.exits.items() if location is not None else [])
+    ) or "None"
+
+    items_list = "\n".join(
+        f"- {item.id}: {item.description}"
+        for item in (location.items if location is not None else [])
+    ) or "None"
+
+    characters_list = "\n".join(
+        f"- {char.name} ({char.id}): {char.notes or 'No notes.'}"
+        for char in world.characters.values()
+    ) or "None"
+
+    recent_events = "\n".join(world.event_log[-10:]) or "None"
+    player_inventory = ", ".join(
+        f"{item.name} ({item.id})" for item in world.player.inventory
+    ) or "None"
+    player_flags = "None"
+
+    return template.format(
+        world_summary=world.description,
+        location_name=location_name,
+        location_id=world.player.location_id,
+        location_description=location_description,
+        location_state=location_state,
+        exits_list=exits_list,
+        items_list=items_list,
+        characters_list=characters_list,
+        recent_events=recent_events,
+        player_name=world.player.name,
+        player_inventory=player_inventory,
+        player_flags=player_flags,
     )
+
+
+async def _new_world(
+    world_name: str,
+    world_description: str,
+    world_path: Path,
+    model: str,
+    temperature: float,
+) -> World:
+    # Initialize the world state and ask the LLM to build the first location.
     player = Character(
         id="player",
         name="Player",
         description="An explorer stepping into the unknown.",
         location_id="start",
     )
-    world = World(locations={start_location.id: start_location}, player=player)
-    if world_description.strip():
-        world.event_log.append(f"World premise: {world_name} — {world_description.strip()}")
+    world = World(
+        description=world_description,
+        locations={},
+        player=player,
+        event_log=[],
+        characters={},
+    )
+    set_current_world(world, path=world_path)
+
+    prompt_path = Path(__file__).resolve().parent / "templates" / "world_build_init.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8").format(world_description=world_description)
+
+    conversation: list[Message] = [
+        Message(role="system", content=prompt_text),
+        Message(role="user", content=f"Create the first location for the world '{world_name}'"),
+    ]
+
+    client = get_client()
+    async for _event in client.chat_stream(
+        model=model,
+        messages=conversation,
+        temperature=temperature,
+        tools=get_tools(tool_types=TOOL_TYPES),
+    ):
+        pass
+
+    # place player in location
+    if world.player.location_id not in world.locations and world.locations:
+        world.player.location_id = next(iter(world.locations))
+
+    try:
+        world.save_to_file(world_path)
+    except Exception:
+        pass
+
+    _WORLD_CACHE[cache_key] = (world_path, world)
     return world
 
 
-def _load_or_create_world(world_name: str, world_description: str) -> tuple[Path, World]:
+def _new_location() -> Location:
+    # TODO: prompt llm to create location and add to world
+    pass
+
+
+async def _load_or_create_world(
+    world_name: str,
+    world_description: str,
+    model: str,
+    temperature: float,
+) -> tuple[Path, World]:
     cache_key = _slugify_world_name(world_name)
     path = _default_world_path(world_name)
     cache_entry = _WORLD_CACHE.get(cache_key)
 
     if path.exists():
-        mtime = path.stat().st_mtime
-        if cache_entry and cache_entry[0] == path and cache_entry[1] == mtime:
-            return path, cache_entry[2]
+        if cache_entry and cache_entry[0] == path:
+            path, world = cache_entry
+            set_current_world(world, path=path)
+            return path, cache_entry[1]
         world = World.load_from_file(path)
-        _WORLD_CACHE[cache_key] = (path, mtime, world)
+        set_current_world(world, path=path)
+        _WORLD_CACHE[cache_key] = (path, world)
         return path, world
 
-    world = _new_world(world_name, world_description)
-    world.save_to_file(path)
-    mtime = path.stat().st_mtime
-    _WORLD_CACHE[cache_key] = (path, mtime, world)
+    world = await _new_world(world_name, world_description, path, model, temperature)
     return path, world
 
 
 class WorldExplorerSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     model: str = Field(json_schema_extra={"widget": "model_select"})
     world_name: str = Field(
@@ -88,16 +175,7 @@ class WorldExplorerSettings(BaseModel):
         description="Optional description used to seed a newly created world.",
         json_schema_extra={"widget": "textarea"},
     )
-    system_prompt: str = Field(
-        default="",
-        description="Optional instructions for the assistant",
-        json_schema_extra={"widget": "textarea"},
-    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    preserve_tool_results: bool = Field(
-        default=False,
-        description="Keep tool call results in the conversation sent to the model for full context",
-    )
 
 
 @register_workflow
@@ -109,25 +187,24 @@ class WorldExplorerWorkflow(Workflow):
 
     async def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         settings = WorldExplorerSettings.model_validate(ctx.chat.workflow_settings)
-        world_path, world = _load_or_create_world(
+
+        # Load or create the world based on the provided name and description
+        world_path, world = await _load_or_create_world(
             settings.world_name,
             settings.world_description,
+            settings.model,
+            settings.temperature,
         )
 
         conversation: list[Message] = []
-        if settings.system_prompt:
-            conversation.append(Message(role="system", content=settings.system_prompt))
-        conversation.append(
-            Message(
-                role="system",
-                content=(
-                    f"World file: {world_path}\n"
-                    "Current world state JSON (authoritative):\n"
-                    f"{world.model_dump_json(indent=2)}"
-                ),
-            )
-        )
-        conversation.extend(history_for_model(ctx.chat.messages, preserve_tool_results=settings.preserve_tool_results))
+        
+        # if player is at a new location then prompt system to create the location first
+        if world.player.location_id not in world.locations:
+            _new_location()
+
+        conversation: list[Message] = []
+        conversation.append(Message(role="system", content=_render_world_story(world)))
+        conversation.extend(history_for_model(ctx.chat.messages))
         conversation.append(ctx.user_message)
 
         client = get_client()
