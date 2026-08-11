@@ -1,6 +1,8 @@
 
 
+from pathlib import Path
 from typing import Any, Literal, Dict, List
+import os
 
 from pydantic import BaseModel, Field
 
@@ -67,5 +69,19 @@ class World(BaseModel):
     # Tracks where the player currently is. This MUST match one of the Location IDs.
     player: Character = Field(description="The player character and their current state.")
     characters: dict[str, Character] = Field(default_factory=dict, description="Non-player characters in the world, keyed by their unique ID.")
+
+    def save_to_file(self, file_path: str | Path) -> Path:
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp = path.with_suffix(f"{path.suffix}.tmp")
+        tmp.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+        return path
+
+    @classmethod
+    def load_from_file(cls, file_path: str | Path) -> "World":
+        path = Path(file_path)
+        return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
 
