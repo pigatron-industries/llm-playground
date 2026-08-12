@@ -9,8 +9,9 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...config import get_chats_dir
-from ...providers import ChatEvent, get_client
+from ...providers import ChatEvent, StreamComplete, get_client
 from ...schemas import Chat, Message
+from ...store import get_store
 from ...tools import get_tools
 from ..base import Workflow, WorkflowContext
 from ..common import history_for_model
@@ -79,14 +80,10 @@ def _render_world_story(world: World) -> str:
     )
 
 
-async def _new_world(
-    world_name: str,
+def _new_world(
     world_description: str,
     world_path: Path,
-    model: str,
-    temperature: float,
 ) -> World:
-    # Initialize the world state and ask the LLM to build the first location.
     player = Character(
         id="player",
         name="Player",
@@ -101,7 +98,18 @@ async def _new_world(
         characters={},
     )
     set_current_world(world, path=world_path)
+    return world
 
+
+async def _bootstrap_world(
+    chat_id: str,
+    world: World,
+    world_name: str,
+    world_description: str,
+    world_path: Path,
+    model: str,
+    temperature: float,
+) -> AsyncIterator[ChatEvent]:
     prompt_path = Path(__file__).resolve().parent / "templates" / "world_build_init.md"
     prompt_text = prompt_path.read_text(encoding="utf-8").format(world_description=world_description)
 
@@ -111,15 +119,18 @@ async def _new_world(
     ]
 
     client = get_client()
-    async for _event in client.chat_stream(
+    async for event in client.chat_stream(
         model=model,
         messages=conversation,
         temperature=temperature,
         tools=get_tools(tool_types=TOOL_TYPES),
     ):
-        pass
+        if isinstance(event, StreamComplete):
+            # Persist bootstrap messages from the completed stream
+            for message in event.messages:
+                get_store().add_message(chat_id, message)
+        yield event
 
-    # place player in location
     if world.player.location_id not in world.locations and world.locations:
         world.player.location_id = next(iter(world.locations))
 
@@ -128,8 +139,7 @@ async def _new_world(
     except Exception:
         pass
 
-    _WORLD_CACHE[cache_key] = (world_path, world)
-    return world
+    _WORLD_CACHE[_slugify_world_name(world_name)] = (world_path, world)
 
 
 def _new_location() -> Location:
@@ -140,9 +150,7 @@ def _new_location() -> Location:
 async def _load_or_create_world(
     world_name: str,
     world_description: str,
-    model: str,
-    temperature: float,
-) -> tuple[Path, World]:
+) -> tuple[Path, World, bool]:
     cache_key = _slugify_world_name(world_name)
     path = _default_world_path(world_name)
     cache_entry = _WORLD_CACHE.get(cache_key)
@@ -151,14 +159,15 @@ async def _load_or_create_world(
         if cache_entry and cache_entry[0] == path:
             path, world = cache_entry
             set_current_world(world, path=path)
-            return path, cache_entry[1]
+            return path, world, False
         world = World.load_from_file(path)
         set_current_world(world, path=path)
         _WORLD_CACHE[cache_key] = (path, world)
-        return path, world
+        return path, world, False
 
-    world = await _new_world(world_name, world_description, path, model, temperature)
-    return path, world
+    world = _new_world(world_description, path)
+    _WORLD_CACHE[cache_key] = (path, world)
+    return path, world, True
 
 
 class WorldExplorerSettings(BaseModel):
@@ -189,18 +198,22 @@ class WorldExplorerWorkflow(Workflow):
         settings = WorldExplorerSettings.model_validate(ctx.chat.workflow_settings)
 
         # Load or create the world based on the provided name and description
-        world_path, world = await _load_or_create_world(
+        world_path, world, created = await _load_or_create_world(
             settings.world_name,
             settings.world_description,
-            settings.model,
-            settings.temperature,
         )
 
-        conversation: list[Message] = []
-        
-        # if player is at a new location then prompt system to create the location first
-        if world.player.location_id not in world.locations:
-            _new_location()
+        if created:
+            async for event in _bootstrap_world(
+                ctx.chat.id,
+                world,
+                settings.world_name,
+                settings.world_description,
+                world_path,
+                settings.model,
+                settings.temperature,
+            ):
+                yield event
 
         conversation: list[Message] = []
         conversation.append(Message(role="system", content=_render_world_story(world)))
