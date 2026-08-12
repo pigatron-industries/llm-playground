@@ -15,6 +15,7 @@ from .world_schema import Exit, Item, Location, World
 # create_character, update_character, remove_character,
 # remove_item, move_item_to_character, move_item_to_location,
 # update_exit, remove_exit_from_location,
+# join_locations (creates opposite exits at both locations)
 
 
 _current_world: contextvars.ContextVar[World | None] = contextvars.ContextVar(
