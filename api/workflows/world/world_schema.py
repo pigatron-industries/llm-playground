@@ -1,10 +1,49 @@
 
 
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, Dict, List
 import os
 
 from pydantic import BaseModel, Field
+
+
+class WorldContext:
+    """Holds the current world instance and its file path for the active workflow turn."""
+
+    def __init__(self) -> None:
+        self._world: ContextVar["World | None"] = ContextVar(
+            "world_context_world", default=None
+        )
+        self._world_path: ContextVar[Path | None] = ContextVar(
+            "world_context_path", default=None
+        )
+
+    def set_world(self, world: "World", path: str | Path | None = None) -> None:
+        self._world.set(world)
+        if path is not None:
+            self._world_path.set(Path(path))
+
+    def get_world(self) -> "World | None":
+        return self._world.get()
+
+    def get_world_path(self) -> Path | None:
+        return self._world_path.get()
+
+
+world_context = WorldContext()
+
+
+def set_current_world(world: "World", path: str | Path | None = None) -> None:
+    world_context.set_world(world, path=path)
+
+
+def get_current_world() -> "World | None":
+    return world_context.get_world()
+
+
+def get_current_world_path() -> Path | None:
+    return world_context.get_world_path()
 
 
 class Item(BaseModel):

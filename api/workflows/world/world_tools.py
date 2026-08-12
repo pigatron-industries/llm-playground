@@ -3,45 +3,26 @@
 from __future__ import annotations
 
 import traceback
-import contextvars
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...tools.registry import register_tool
-from .world_schema import Exit, Item, Location, World
+from .world_schema import (
+    Exit,
+    Item,
+    Location,
+    World,
+    get_current_world,
+    get_current_world_path,
+)
 
 # TODO:
 # create_character, update_character, remove_character,
-# remove_item, 
+# remove_item,
 # remove_exit_from_location,
 # join_locations (creates opposite exits at both locations)
-
-
-_current_world: contextvars.ContextVar[World | None] = contextvars.ContextVar(
-    "current_world",
-    default=None,
-)
-
-_current_world_path: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
-    "current_world_path",
-    default=None,
-)
-
-
-def set_current_world(world: World, path: str | Path | None = None) -> None:
-    _current_world.set(world)
-    if path is not None:
-        _current_world_path.set(Path(path))
-
-
-def get_current_world() -> World | None:
-    return _current_world.get()
-
-
-def get_current_world_path() -> Path | None:
-    return _current_world_path.get()
 
 
 class InspectLocationArgs(BaseModel):

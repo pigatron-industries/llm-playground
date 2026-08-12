@@ -16,8 +16,7 @@ from ...tools import get_tools
 from ..base import Workflow, WorkflowContext
 from ..common import history_for_model
 from ..registry import register_workflow
-from .world_schema import Character, Location, World
-from .world_tools import set_current_world
+from .world_schema import Character, Location, World, set_current_world
 
 TOOL_TYPES = ["Math", "World"]
 
