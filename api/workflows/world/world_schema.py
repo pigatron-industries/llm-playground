@@ -16,7 +16,7 @@ class Item(BaseModel):
 
 
 class Exit(BaseModel):
-    destination_id: str
+    destination_id: str | None = Field(default=None, description="ID of the destination location, or None if this direction is known to be passable but not yet explored/generated.")
     locked: bool = False
     description: str = ""  # "a heavy iron door"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import traceback
 import contextvars
 from pathlib import Path
 from typing import Any, Literal
@@ -13,7 +14,7 @@ from .world_schema import Exit, Item, Location, World
 
 # TODO:
 # create_character, update_character, remove_character,
-# remove_item, move_item_to_character, move_item_to_location,
+# remove_item, move_item_to_location,
 # update_exit, remove_exit_from_location,
 # join_locations (creates opposite exits at both locations)
 
@@ -102,7 +103,7 @@ class ItemArgs(BaseModel):
 
 class ExitArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    destination_id: str = Field(description="The ID of the destination location.")
+    destination_id: str | None = Field(default=None, description="ID of the destination location, or None if this direction is known to be passable but not yet explored/generated.")
     locked: bool = Field(default=False, description="Whether this exit is locked.")
     description: str = Field(default="", description="A description of the exit.")
 
@@ -181,13 +182,26 @@ def create_location(
 
     try:
         for item_data in (items or []):
-            if item_data.item_id in world.items:
-                raise ValueError(f"Item '{item_data.item_id}' already exists in the world")
+            # support both Pydantic model and plain dict
+            if hasattr(item_data, "model_dump"):
+                data = item_data.model_dump()
+            elif isinstance(item_data, dict):
+                data = item_data
+            else:
+                raise ValueError("Invalid item entry; expected dict or ItemArgs")
+
+            item_id = data.get("item_id")
+            if not item_id:
+                raise ValueError("Missing 'item_id' for item")
+
+            if item_id in world.items:
+                raise ValueError(f"Item '{item_id}' already exists in the world")
+
             item = Item(
-                id=item_data.item_id,
-                name=item_data.name,
-                description=item_data.description,
-                is_collectible=item_data.is_collectible,
+                id=item_id,
+                name=data.get("name", ""),
+                description=data.get("description", ""),
+                is_collectible=data.get("is_collectible", True),
             )
             world.add_item_to_location(item, location_id)
     except ValueError as exc:
@@ -248,54 +262,6 @@ def update_location(
     return f"Updated location '{location_id}'."
 
 
-class UpdateItemArgs(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    item_id: str = Field(description="The ID of the item to update.")
-    name: str | None = Field(
-        default=None,
-        description="New display name for the item. Omit to keep the existing name.",
-    )
-    description: str | None = Field(
-        default=None,
-        description="New description for the item. Omit to keep the existing description.",
-    )
-    is_collectible: bool | None = Field(
-        default=None,
-        description="New collectible flag. Omit to keep the current value.",
-    )
-
-@register_tool(UpdateItemArgs, description="Update the name, description, or collectible flag of an existing item anywhere in the world.", category="World")
-def update_item(
-    item_id: str,
-    name: str | None = None,
-    description: str | None = None,
-    is_collectible: bool | None = None,
-) -> str:
-    world = get_current_world()
-    if world is None:
-        return "Error: no world is loaded for this workflow"
-
-    item = world.items.get(item_id)
-    if item is None:
-        return f"Error: item '{item_id}' not found in the world"
-
-    if name is not None:
-        item.name = name
-    if description is not None:
-        item.description = description
-    if is_collectible is not None:
-        item.is_collectible = is_collectible
-
-    world_path = get_current_world_path()
-    if world_path is not None:
-        try:
-            world.save_to_file(world_path)
-        except Exception as exc:
-            return f"Updated item '{item_id}', but failed to save world: {exc}"
-
-    return f"Updated item '{item_id}'."
-
-
 class AddExitArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     location_id: str = Field(description="The ID of the location to add the exit to.")
@@ -344,6 +310,54 @@ def add_exit_to_location(
     return f"Added exit '{direction}' from '{location_id}' to '{destination_id}'"
 
 
+class UpdateItemArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_id: str = Field(description="The ID of the item to update.")
+    name: str | None = Field(
+        default=None,
+        description="New display name for the item. Omit to keep the existing name.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="New description for the item. Omit to keep the existing description.",
+    )
+    is_collectible: bool | None = Field(
+        default=None,
+        description="New collectible flag. Omit to keep the current value.",
+    )
+
+@register_tool(UpdateItemArgs, description="Update the name, description, or collectible flag of an existing item anywhere in the world.", category="World")
+def update_item(
+    item_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    is_collectible: bool | None = None,
+) -> str:
+    world = get_current_world()
+    if world is None:
+        return "Error: no world is loaded for this workflow"
+
+    item = world.items.get(item_id)
+    if item is None:
+        return f"Error: item '{item_id}' not found in the world"
+
+    if name is not None:
+        item.name = name
+    if description is not None:
+        item.description = description
+    if is_collectible is not None:
+        item.is_collectible = is_collectible
+
+    world_path = get_current_world_path()
+    if world_path is not None:
+        try:
+            world.save_to_file(world_path)
+        except Exception as exc:
+            return f"Updated item '{item_id}', but failed to save world: {exc}"
+
+    return f"Updated item '{item_id}'."
+
+
 class AddItemArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
     location_id: str = Field(description="The ID of the location to add the item to.")
@@ -387,3 +401,77 @@ def add_item_to_location(
             return f"Added item '{item_id}' to location '{location_id}', but failed to save world: {exc}"
 
     return f"Added item '{item_id}' to location '{location_id}'."
+
+
+class MoveItemToCharacterArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    location_id: str = Field(description="The ID of the location to take the item from.")
+    character_id: str = Field(description="The ID of the character to receive the item.")
+    item_id: str = Field(description="The ID of the item to move.")
+
+@register_tool(MoveItemToCharacterArgs, description="Move an item from a location into a character's inventory.", category="World")
+def move_item_to_character(location_id: str, character_id: str, item_id: str) -> str:
+    world = get_current_world()
+    if world is None:
+        return "Error: no world is loaded for this workflow"
+
+    location = world.locations.get(location_id)
+    if location is None:
+        return f"Error: location '{location_id}' does not exist"
+
+    # Validate character exists (player or NPC)
+    if character_id != world.player.id and character_id not in world.characters:
+        return f"Error: character '{character_id}' does not exist"
+
+    # Validate item exists and is in the specified location
+    if item_id not in world.items:
+        return f"Error: item '{item_id}' does not exist in the world"
+    if item_id not in location.item_ids:
+        return f"Error: item '{item_id}' is not present in location '{location_id}'"
+
+    try:
+        world.move_item_to_character(item_id, character_id)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    world_path = get_current_world_path()
+    if world_path is not None:
+        try:
+            world.save_to_file(world_path)
+        except Exception as exc:
+            return f"Moved item '{item_id}' to '{character_id}', but failed to save world: {exc}"
+
+    return f"Moved item '{item_id}' from '{location_id}' to character '{character_id}'."
+
+
+class MoveItemToLocationArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_id: str = Field(description="The ID of the item to move.")
+    location_id: str = Field(description="The ID of the destination location.")
+
+@register_tool(MoveItemToLocationArgs, description="Move an item into a location.", category="World")
+def move_item_to_location(item_id: str, location_id: str) -> str:
+    world = get_current_world()
+    if world is None:
+        return "Error: no world is loaded for this workflow"
+
+    location = world.locations.get(location_id)
+    if location is None:
+        return f"Error: location '{location_id}' does not exist"
+
+    if item_id not in world.items:
+        return f"Error: item '{item_id}' does not exist in the world"
+
+    try:
+        world.move_item_to_location(item_id, location_id)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    world_path = get_current_world_path()
+    if world_path is not None:
+        try:
+            world.save_to_file(world_path)
+        except Exception as exc:
+            return f"Moved item '{item_id}' to '{location_id}', but failed to save world: {exc}"
+
+    return f"Moved item '{item_id}' to location '{location_id}'."
