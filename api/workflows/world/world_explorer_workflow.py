@@ -50,7 +50,7 @@ def _render_world_story(world: World) -> str:
 
     items_list = "\n".join(
         f"- {item.id}: {item.description}"
-        for item in (location.items if location is not None else [])
+        for item in (world.get_location_items(location.id) if location is not None else [])
     ) or "None"
 
     characters_list = "\n".join(
@@ -60,7 +60,8 @@ def _render_world_story(world: World) -> str:
 
     recent_events = "\n".join(world.event_log[-10:]) or "None"
     player_inventory = ", ".join(
-        f"{item.name} ({item.id})" for item in world.player.inventory
+        f"{item.name} ({item.id})"
+        for item in world.get_character_items(world.player.id)
     ) or "None"
     player_flags = "None"
 
@@ -88,6 +89,7 @@ def _new_world(
         id="player",
         name="Player",
         description="An explorer stepping into the unknown.",
+        inventory_ids=[],
         location_id="start",
     )
     world = World(

@@ -12,7 +12,8 @@ from ...tools.registry import register_tool
 from .world_schema import Exit, Item, Location, World
 
 # TODO:
-# update_item, remove_item, move_item_to_character, move_item_to_location,
+# create_character, update_character, remove_character,
+# remove_item, move_item_to_character, move_item_to_location,
 # update_exit, remove_exit_from_location,
 
 
@@ -65,11 +66,12 @@ def inspect_location(location_id: str) -> str:
         for direction, exit in location.exits.items()
     }
 
+    item_names = [item.name for item in world.get_location_items(location_id)]
     return (
         f"Location {location_id}: {location.name}\n"
         f"Description: {location.description}\n"
         f"State: {state}\n"
-        f"Items: {[item.name for item in location.items]}\n"
+        f"Items: {item_names}\n"
         f"Exits: {exits}"
     )
 
@@ -165,19 +167,6 @@ def create_location(
     except Exception as exc:
         return f"Error: invalid exits data: {exc}"
 
-    try:
-        location_items = [
-            Item(
-                id=item_data.item_id,
-                name=item_data.name,
-                description=item_data.description,
-                is_collectible=item_data.is_collectible,
-            )
-            for item_data in (items or [])
-        ]
-    except Exception as exc:
-        return f"Error: invalid item data: {exc}"
-
     location = Location(
         id=location_id,
         footprint=footprint_tuples,
@@ -185,10 +174,27 @@ def create_location(
         description=description,
         state=state,
         exits=location_exits,
-        items=location_items,
+        item_ids=[],
     )
-
     world.locations[location_id] = location
+
+    try:
+        for item_data in (items or []):
+            if item_data.item_id in world.items:
+                raise ValueError(f"Item '{item_data.item_id}' already exists in the world")
+            item = Item(
+                id=item_data.item_id,
+                name=item_data.name,
+                description=item_data.description,
+                is_collectible=item_data.is_collectible,
+            )
+            world.add_item_to_location(item, location_id)
+    except ValueError as exc:
+        del world.locations[location_id]
+        return f"Error: {exc}"
+    except Exception as exc:
+        del world.locations[location_id]
+        return f"Error: invalid item data: {exc}"
 
     world_path = get_current_world_path()
     if world_path is not None:
@@ -212,7 +218,7 @@ class UpdateLocationArgs(BaseModel):
         description="New structured state for the location. Replaces the entire existing state. Omit to keep the current state.",
     )
 
-@register_tool(UpdateLocationArgs, description="Update the description and/or state of an existing location.", category="World")
+@register_tool(UpdateLocationArgs, description="Update the description and/or state of an existing location. Update when new facts become known about the location", category="World")
 def update_location(
     location_id: str,
     description: str | None = None,
@@ -239,6 +245,54 @@ def update_location(
             return f"Updated location '{location_id}', but failed to save world: {exc}"
 
     return f"Updated location '{location_id}'."
+
+
+class UpdateItemArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_id: str = Field(description="The ID of the item to update.")
+    name: str | None = Field(
+        default=None,
+        description="New display name for the item. Omit to keep the existing name.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="New description for the item. Omit to keep the existing description.",
+    )
+    is_collectible: bool | None = Field(
+        default=None,
+        description="New collectible flag. Omit to keep the current value.",
+    )
+
+@register_tool(UpdateItemArgs, description="Update the name, description, or collectible flag of an existing item anywhere in the world.", category="World")
+def update_item(
+    item_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    is_collectible: bool | None = None,
+) -> str:
+    world = get_current_world()
+    if world is None:
+        return "Error: no world is loaded for this workflow"
+
+    item = world.items.get(item_id)
+    if item is None:
+        return f"Error: item '{item_id}' not found in the world"
+
+    if name is not None:
+        item.name = name
+    if description is not None:
+        item.description = description
+    if is_collectible is not None:
+        item.is_collectible = is_collectible
+
+    world_path = get_current_world_path()
+    if world_path is not None:
+        try:
+            world.save_to_file(world_path)
+        except Exception as exc:
+            return f"Updated item '{item_id}', but failed to save world: {exc}"
+
+    return f"Updated item '{item_id}'."
 
 
 class AddExitArgs(BaseModel):
@@ -313,16 +367,16 @@ def add_item_to_location(
     if location is None:
         return f"Error: location '{location_id}' does not exist"
 
-    if any(item.id == item_id for item in location.items):
-        return f"Error: item '{item_id}' already exists in location '{location_id}'"
-
-    item = Item(
-        id=item_id,
-        name=name,
-        description=description,
-        is_collectible=is_collectible,
-    )
-    location.items.append(item)
+    try:
+        item = Item(
+            id=item_id,
+            name=name,
+            description=description,
+            is_collectible=is_collectible,
+        )
+        world.add_item_to_location(item, location_id)
+    except ValueError as exc:
+        return f"Error: {exc}"
 
     world_path = get_current_world_path()
     if world_path is not None:
