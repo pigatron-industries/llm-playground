@@ -14,8 +14,8 @@ from .world_schema import Exit, Item, Location, World
 
 # TODO:
 # create_character, update_character, remove_character,
-# remove_item, move_item_to_location,
-# update_exit, remove_exit_from_location,
+# remove_item, 
+# remove_exit_from_location,
 # join_locations (creates opposite exits at both locations)
 
 
@@ -308,6 +308,56 @@ def add_exit_to_location(
             return f"Added exit to '{direction}' on '{location_id}', but failed to save world: {exc}"
 
     return f"Added exit '{direction}' from '{location_id}' to '{destination_id}'"
+
+
+class UpdateExitArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    location_id: str = Field(description="The ID of the location containing the exit.")
+    direction: Literal["north", "south", "east", "west"] = Field(description="Which direction's exit to update.")
+    destination_id: str | None = Field(default=None, description="New destination location ID. Omit to keep current destination.")
+    locked: bool | None = Field(default=None, description="New locked state. Omit to keep current value.")
+    description: str | None = Field(default=None, description="New description for the exit. Omit to keep current description.")
+
+@register_tool(UpdateExitArgs, description="Update an exit's destination, locked state, or description.", category="World")
+def update_exit(
+    location_id: str,
+    direction: Literal["north", "south", "east", "west"],
+    destination_id: str | None = None,
+    locked: bool | None = None,
+    description: str | None = None,
+) -> str:
+    world = get_current_world()
+    if world is None:
+        return "Error: no world is loaded for this workflow"
+
+    location = world.locations.get(location_id)
+    if location is None:
+        return f"Error: location '{location_id}' does not exist"
+
+    if direction not in location.exits:
+        return f"Error: location '{location_id}' has no exit in direction '{direction}'"
+
+    exit_obj = location.exits[direction]
+
+    if destination_id is not None:
+        if destination_id not in world.locations:
+            return f"Error: destination location '{destination_id}' does not exist"
+        exit_obj.destination_id = destination_id
+
+    if locked is not None:
+        exit_obj.locked = locked
+
+    if description is not None:
+        exit_obj.description = description
+
+    world_path = get_current_world_path()
+    if world_path is not None:
+        try:
+            world.save_to_file(world_path)
+        except Exception as exc:
+            return f"Updated exit on '{location_id}' but failed to save world: {exc}"
+
+    return f"Updated exit '{direction}' on location '{location_id}'."
 
 
 class UpdateItemArgs(BaseModel):
