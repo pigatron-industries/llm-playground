@@ -41,6 +41,7 @@ def _render_world_story(world: World) -> str:
     location_name = location.name if location is not None else "Unknown"
     location_description = location.description if location is not None else ""
     location_state = location.state if location is not None else {}
+    location_footprint = ", ".join(str(cell) for cell in (location.footprint if location is not None else [])) or "None"
 
     exits_list = "\n".join(
         f"{direction} -> {exit.description}: leads to '{exit.destination_id}'"
@@ -69,6 +70,7 @@ def _render_world_story(world: World) -> str:
         location_name=location_name,
         location_id=world.player.location_id,
         location_description=location_description,
+        location_footprint=location_footprint,
         location_state=location_state,
         exits_list=exits_list,
         items_list=items_list,
