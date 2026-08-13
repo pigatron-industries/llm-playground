@@ -185,6 +185,11 @@ class World(BaseModel):
         self._remove_item_references(item_id)
         del self.items[item_id]
 
+    def get_character(self, character_id: str) -> Character | None:
+        if character_id == self.player.id:
+            return self.player
+        return self.characters.get(character_id)
+
     def save_to_file(self, file_path: str | Path) -> Path:
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
