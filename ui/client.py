@@ -270,3 +270,12 @@ async def stop_message(chat_id: str) -> dict:
         resp = await client.post(f"/chats/{chat_id}/stop")
         resp.raise_for_status()
         return resp.json()
+
+
+async def get_chat_state(chat_id: str) -> dict:
+    """Return the current state dict for a chat's workflow (e.g. map, status).
+    Returns empty dict for workflows that don't support state output."""
+    async with _client(10) as client:
+        resp = await client.get(f"/chats/{chat_id}/state")
+        resp.raise_for_status()
+        return resp.json()

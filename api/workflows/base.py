@@ -42,6 +42,7 @@ class Workflow(ABC):
     name: str
     description: str
     settings_model: type[BaseModel]
+    has_state: bool = False  # Whether this workflow renders a state panel in the UI
 
     @abstractmethod
     def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
@@ -55,3 +56,12 @@ class Workflow(ABC):
         approximation (or 0, the default for workflows with nothing extra)
         is fine; never raise here."""
         return 0
+
+    def get_state(self, chat: Chat) -> dict:
+        """Return a serialisable state dict for the UI to render after messages.
+
+        Only called when ``has_state`` is True. The default returns an empty dict;
+        override in subclasses to provide workflow-specific state (e.g. a map,
+        status panel, or progress indicator).
+        """
+        return {}

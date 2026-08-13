@@ -731,7 +731,7 @@ def register_pages() -> None:
             else:
                 render_projects()
 
-        def render_history() -> None:
+        async def render_history() -> None:
             messages_col.clear()
             with messages_col:
                 if not history:
@@ -741,7 +741,14 @@ def register_pages() -> None:
                         else 'No chat selected — click "+" next to Chats to create one.'
                     )
                     ui.label(placeholder).classes("text-gray-400 text-center w-full mt-8")
-                for msg in history:
+
+                # Track the index of the last assistant message for world state
+                last_assistant_idx = -1
+                for idx, msg in enumerate(history):
+                    if msg["role"] == "assistant":
+                        last_assistant_idx = idx
+
+                for idx, msg in enumerate(history):
                     is_user = msg["role"] == "user"
                     if msg["role"] == "tool":
                         with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
@@ -800,6 +807,30 @@ def register_pages() -> None:
                                             part_text,
                                             extras=["fenced-code-blocks", "tables"],
                                         ).classes("text-gray-800 break-words max-w-full")
+
+                    # After the last assistant message, append state for workflows that support it.
+                    if idx == last_assistant_idx and state["chat_id"]:
+                        current_workflow = next(
+                            (w for w in workflows if w["id"] == state["workflow_id"]),
+                            None,
+                        )
+                        if current_workflow and current_workflow.get("has_state"):
+                            try:
+                                wf_state = await client.get_chat_state(state["chat_id"])
+                            except Exception:  # noqa: BLE001
+                                wf_state = {}
+                            if wf_state:
+                                with _message_bubble("State", is_user=False):
+                                    with ui.column().classes("w-full gap-1"):
+                                        if "location_name" in wf_state:
+                                            ui.label(
+                                                f"📍 {wf_state['location_name']} ({wf_state.get('location_id', '?')})"
+                                            ).classes("text-xs text-gray-500")
+                                        if "ascii_map" in wf_state:
+                                            ui.markdown(
+                                                f"```\n{wf_state['ascii_map']}\n```",
+                                                extras=["fenced-code-blocks"],
+                                            ).classes("text-[10px] text-gray-500 font-mono")
 
         async def render_chat_list() -> None:
             try:
@@ -872,7 +903,7 @@ def register_pages() -> None:
             all while nothing is generating."""
             stream_poll_timer.activate()
 
-        def set_history(messages: list[dict]) -> None:
+        async def set_history(messages: list[dict]) -> None:
             # We're switching to a fixed, persisted message list — retire
             # whichever live-stream view (if any) was previously allowed to
             # render, so it can't write stray output into this new view, and
@@ -884,7 +915,7 @@ def register_pages() -> None:
             if old_task is not None and not old_task.done():
                 old_task.cancel()
             history[:] = messages
-            render_history()
+            await render_history()
             update_context_usage()
             messages_area.scroll_to(percent=1.0)
 
@@ -894,7 +925,7 @@ def register_pages() -> None:
             state["workflow_id"] = chat.get("workflow_id")
             state["workflow_settings"] = chat.get("workflow_settings") or {}
             _store_chat_id(chat["id"])
-            set_history(chat["messages"])
+            await set_history(chat["messages"])
             apply_chat_to_sidebar()
             await refresh_context_estimate()
             # Refresh the sidebar's highlight now, before reattaching — if
@@ -904,7 +935,7 @@ def register_pages() -> None:
             await render_chat_list()
             await reattach_if_streaming(chat_id)
 
-        def clear_chat() -> None:
+        async def clear_chat() -> None:
             """Drop back to the no-chat-selected state (e.g. after deleting the
             last chat)."""
             state["chat_id"] = None
@@ -912,7 +943,7 @@ def register_pages() -> None:
             state["workflow_settings"] = {}
             state["extra_context_chars"] = 0
             _store_chat_id(None)
-            set_history([])
+            await set_history([])
             apply_chat_to_sidebar()
 
         async def open_chat(chat_id: str) -> None:
@@ -976,7 +1007,7 @@ def register_pages() -> None:
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:
-                    clear_chat()
+                    await clear_chat()
             await render_chat_list()
 
         def edit_chat_title(chat_id: str, current_title: str) -> None:
@@ -1170,7 +1201,7 @@ def register_pages() -> None:
             text_input.value = ""
             # Optimistically show the user's message.
             history.append({"role": "user", "content": content})
-            render_history()
+            await render_history()
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
             is_streaming["value"] = True
@@ -1224,13 +1255,13 @@ def register_pages() -> None:
             if updated is not None:
                 # Re-sync from the server (source of truth); this also replaces
                 # the streaming bubble when render_history() clears the column.
-                set_history(updated["messages"])
+                await set_history(updated["messages"])
                 await render_chat_list()
             else:
                 ui.notify(f"Chat failed: {error}", type="negative", multi_line=True)
                 if history and history[-1]["role"] == "user":
                     history.pop()  # roll back the optimistic message
-                render_history()
+                await render_history()
                 # If that was a failed first message, the workflow choice is
                 # still open — undo the lock from the optimistic append above.
                 apply_chat_to_sidebar()
@@ -1261,7 +1292,11 @@ def register_pages() -> None:
                 # active, so bring up the assistant bubble+spinner now rather
                 # than waiting for the first delta.
                 history.append({"role": "user", "content": question})
-                render_history()
+                with messages_col:
+                    with _message_bubble("You", is_user=True):
+                        ui.label(question).classes(
+                            "text-gray-800 whitespace-pre-wrap break-words"
+                        )
                 view["ensure_bubble"]()
                 _wake_stream_poll()
 
@@ -1298,11 +1333,11 @@ def register_pages() -> None:
             if updated is None and error is None:
                 return  # nothing was streaming — the bubble was never opened
             if updated is not None:
-                set_history(updated["messages"])
+                await set_history(updated["messages"])
                 await render_chat_list()
             else:
                 ui.notify(f"Chat failed: {error}", type="negative", multi_line=True)
-                render_history()
+                await render_history()
 
         async def stop() -> None:
             """Stop the current stream and save the chat."""
@@ -1319,7 +1354,7 @@ def register_pages() -> None:
         text_input.on("keydown.enter", send)
 
         async def initial_load() -> None:
-            render_history()
+            await render_history()
             await load_projects()
             try:
                 info = await client.get_provider()
@@ -1349,7 +1384,7 @@ def register_pages() -> None:
                 if chats:
                     await load_chat(chats[0]["id"])
                 else:
-                    clear_chat()
+                    await clear_chat()
             await render_chat_list()
 
         # NiceGUI must send the page within ~3s; defer slow provider/chat IO.

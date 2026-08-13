@@ -196,6 +196,7 @@ class WorldExplorerWorkflow(Workflow):
     name = "World explorer"
     description = "Explore a world"
     settings_model = WorldExplorerSettings
+    has_state = True
 
     async def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         settings = WorldExplorerSettings.model_validate(ctx.chat.workflow_settings)
@@ -235,3 +236,29 @@ class WorldExplorerWorkflow(Workflow):
     def extra_context_chars(self, chat: Chat) -> int:
         settings = WorldExplorerSettings.model_validate(chat.workflow_settings)
         return len(settings.system_prompt)
+
+    def get_state(self, chat: Chat) -> dict:
+        """Return current world state for the UI: player location and ASCII map."""
+        settings = WorldExplorerSettings.model_validate(chat.workflow_settings)
+        world_name = settings.world_name
+        if not world_name:
+            return {}
+
+        import re
+        from pathlib import Path
+
+        slug = re.sub(r"[^a-z0-9]+", "-", world_name.strip().lower()).strip("-") or "world"
+        world_path = _default_world_path(world_name)
+
+        try:
+            world = World.load_from_file(world_path)
+            location = world.locations.get(world.player.location_id)
+            return {
+                "location_id": world.player.location_id,
+                "location_name": location.name if location is not None else "Unknown",
+                "ascii_map": world.render_ascii_map(),
+            }
+        except FileNotFoundError:
+            return {}
+        except Exception:
+            return {}

@@ -37,6 +37,7 @@ def list_workflows() -> list[WorkflowInfo]:
             name=workflow.name,
             description=workflow.description,
             settings_schema=_schema_for(workflow),
+            has_state=workflow.has_state,
         )
         for workflow in _WORKFLOWS.values()
     ]

@@ -204,4 +204,99 @@ class World(BaseModel):
         path = Path(file_path)
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def render_ascii_map(self) -> str:
+        """Render an ASCII map of the world's locations using box-drawing characters.
+
+        Each footprint coordinate becomes a 1x1 cell with walls of 1 character width
+        surrounding it. Walls are shared between adjacent cells.
+        """
+        coords: dict[tuple[int, int], str] = {}
+        for loc_id, loc in self.locations.items():
+            for x, y in loc.footprint:
+                coords[(x, y)] = loc_id
+
+        if not coords:
+            return "(empty world)"
+
+        xs = [p[0] for p in coords]
+        ys = [p[1] for p in coords]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        width = max_x - min_x + 1
+        height = max_y - min_y + 1
+
+        cg_h = height * 2 + 1
+        cg_w = width * 2 + 1
+
+        grid = [[" " for _ in range(cg_w)] for _ in range(cg_h)]
+
+        def set_h(r, c):
+            if 0 <= r < cg_h and 0 <= c < cg_w:
+                grid[r][c] = "─"
+
+        def set_v(r, c):
+            if 0 <= r < cg_h and 0 <= c < cg_w:
+                grid[r][c] = "│"
+
+        for (x, y), loc_id in coords.items():
+            cx = x - min_x
+            cy = y - min_y
+            ir = cy * 2 + 1
+            ic = cx * 2 + 1
+            grid[ir][ic] = (loc_id[0] if loc_id else ".")
+
+            north = coords.get((x, y - 1))
+            south = coords.get((x, y + 1))
+            west = coords.get((x - 1, y))
+            east = coords.get((x + 1, y))
+
+            if not north:
+                set_h(ir - 1, ic)
+            if not south:
+                set_h(ir + 1, ic)
+            if not west:
+                set_v(ir, ic - 1)
+            if not east:
+                set_v(ir, ic + 1)
+
+        # determine corner/intersection chars
+        for r in range(0, cg_h, 2):
+            for c in range(0, cg_w, 2):
+                N = (r - 1 >= 0) and grid[r - 1][c] != " "
+                E = (c + 1 < cg_w) and grid[r][c + 1] != " "
+                S = (r + 1 < cg_h) and grid[r + 1][c] != " "
+                W = (c - 1 >= 0) and grid[r][c - 1] != " "
+                if N and E and S and W:
+                    ch = "┼"
+                elif N and S and (not E and not W):
+                    ch = "│"
+                elif E and W and (not N and not S):
+                    ch = "─"
+                elif N and E and S:
+                    ch = "├"
+                elif E and S and W:
+                    ch = "┬"
+                elif S and W and N:
+                    ch = "┤"
+                elif W and N and E:
+                    ch = "┴"
+                elif S and E:
+                    ch = "┌"
+                elif S and W:
+                    ch = "┐"
+                elif N and E:
+                    ch = "└"
+                elif N and W:
+                    ch = "┘"
+                elif N or S:
+                    ch = "│"
+                elif E or W:
+                    ch = "─"
+                else:
+                    ch = " "
+                grid[r][c] = ch
+
+        return "\n".join("".join(row) for row in grid)
+
 

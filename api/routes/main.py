@@ -260,6 +260,26 @@ def stop_message(chat_id: str) -> dict:
     chat = store.get(chat_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
-    
+
     success = request_stream_stop(chat_id)
     return {"stopped": success, "chat_id": chat_id}
+
+
+@router.get("/chats/{chat_id}/state")
+def get_chat_state(chat_id: str) -> dict:
+    """Return the current state for a chat's workflow (e.g. a map or status panel).
+    Delegates to the workflow's ``get_state`` method. Returns empty dict if the
+    workflow does not support state output."""
+    store = get_store()
+    chat = store.get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    workflow = get_workflow(chat.workflow_id)
+    if not workflow.has_state:
+        return {}
+
+    try:
+        return workflow.get_state(chat)
+    except Exception:
+        return {}

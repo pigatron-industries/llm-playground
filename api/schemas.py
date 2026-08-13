@@ -48,12 +48,16 @@ class WorkflowInfo(BaseModel):
     ``settings_schema`` is the JSON Schema of the workflow's settings model
     (see ``api.workflows.base.Workflow``) — the UI renders a form from it
     rather than hard-coding inputs per workflow.
+
+    ``has_state`` indicates whether the workflow provides a state panel
+    (e.g. a map or status display) that the UI should render after messages.
     """
 
     id: str
     name: str
     description: str
     settings_schema: dict[str, Any]
+    has_state: bool = False
 
 
 # --- Stored chats ----------------------------------------------------------
