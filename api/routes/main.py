@@ -283,3 +283,16 @@ def get_chat_state(chat_id: str) -> dict:
         return workflow.get_state(chat)
     except Exception:
         return {}
+
+
+@router.delete("/chats/{chat_id}/messages/{index}")
+def delete_message(chat_id: str, index: int) -> dict:
+    """Delete a message from a chat's history by its index."""
+    store = get_store()
+    try:
+        updated = store.remove_message(chat_id, index)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return {"deleted": True, "message_count": len(updated.messages)}

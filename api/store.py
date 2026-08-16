@@ -143,6 +143,18 @@ class ChatStore:
             return True
         return False
 
+    def remove_message(self, chat_id: str, index: int) -> Chat:
+        """Remove a message at the given index from a chat's history."""
+        chat = self.get(chat_id)
+        if chat is None:
+            raise KeyError(chat_id)
+        if not 0 <= index < len(chat.messages):
+            raise ValueError(f"Message index {index} out of range")
+        chat.messages.pop(index)
+        chat.updated_at = _now()
+        self._write(chat)
+        return chat
+
     @staticmethod
     def _summarise(chat: Chat) -> ChatSummary:
         return ChatSummary(

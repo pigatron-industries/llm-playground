@@ -46,7 +46,9 @@ def _format_time(iso: str | None) -> tuple[str, str]:
     return (local.strftime("%H:%M"), local.strftime("%Y-%m-%d %H:%M:%S"))
 
 
-def _message_bubble(name: str, is_user: bool, timestamp: str | None = None):
+def _message_bubble(
+    name: str, is_user: bool, timestamp: str | None = None, on_delete: Callable | None = None
+):
     """Render a message row: participant name (+ time) on the left, bubble right.
 
     Returns the (empty) bubble element so the caller can fill it with the
@@ -59,9 +61,17 @@ def _message_bubble(name: str, is_user: bool, timestamp: str | None = None):
             short, full = _format_time(timestamp)
             if short:
                 ui.label(short).classes("text-[10px] text-gray-400").tooltip(full)
-        bubble = ui.element("div").classes(
-            "bg-gray-100 rounded-2xl px-4 py-2 grow min-w-0"
-        )
+        with ui.element("div").classes(
+            "bg-gray-100 rounded-2xl px-4 py-2 grow min-w-0 relative"
+        ):
+            if on_delete is not None:
+                with ui.element("div").classes("absolute top-0 right-0 -mt-1 -mr-1"):
+                    ui.button(
+                        icon="close", on_click=on_delete,
+                    ).props("flat dense round size=xs color=grey-5").classes(
+                        "opacity-20 hover:opacity-100 transition-opacity"
+                    ).tooltip("Remove from history")
+            bubble = ui.element("div").classes("w-full")
     return bubble
 
 
@@ -731,6 +741,23 @@ def register_pages() -> None:
             else:
                 render_projects()
 
+        async def delete_message_at(idx: int) -> None:
+            """Delete a message from the chat history by its index."""
+            if not state["chat_id"]:
+                return
+            try:
+                await client.delete_message(state["chat_id"], idx)
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(f"Could not delete message: {_error_detail(exc)}", type="negative")
+                return
+            # Remove from local history and re-render
+            try:
+                history.pop(idx)
+            except IndexError:
+                pass
+            await render_history()
+            messages_area.scroll_to(percent=1.0)
+
         async def render_history() -> None:
             messages_col.clear()
             with messages_col:
@@ -750,8 +777,9 @@ def register_pages() -> None:
 
                 for idx, msg in enumerate(history):
                     is_user = msg["role"] == "user"
+                    on_delete = lambda _, i=idx: delete_message_at(i)
                     if msg["role"] == "tool":
-                        with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at")):
+                        with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at"), on_delete=on_delete):
                             content = msg.get("content", "")
                             with ui.expansion("Tool Result", icon="build").classes("w-full"):
                                 ui.markdown(
@@ -779,6 +807,7 @@ def register_pages() -> None:
                         "You" if is_user else "Assistant",
                         is_user,
                         msg.get("created_at"),
+                        on_delete=on_delete,
                     ):
                         if is_user:
                             # Keep user input verbatim (no markdown interpretation).

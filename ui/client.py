@@ -279,3 +279,11 @@ async def get_chat_state(chat_id: str) -> dict:
         resp = await client.get(f"/chats/{chat_id}/state")
         resp.raise_for_status()
         return resp.json()
+
+
+async def delete_message(chat_id: str, index: int) -> dict:
+    """Delete a message from a chat's history by its index."""
+    async with _client(10) as client:
+        resp = await client.delete(f"/chats/{chat_id}/messages/{index}")
+        resp.raise_for_status()
+        return resp.json()

@@ -43,8 +43,8 @@ Relevant flags: {player_flags}
 
 ## World Update Rules
 - If the player attempts something that would change the world (take an item, drop an item, discover an item, unlock a door, hurt an NPC, move to a new location) and the action succeeds, call the appropriate tool to update the location description or item description — do not just narrate it as having happened. Only narrate the outcome after the tool call resolves.
-- If the player moves to a location via an exit with no location_id then call the create_location tool with a proposed name/description/footprint before narrating their arrival. 
-- If the player moves to a new locatin then use the update_character tool to update the players location.
+- If the player moves to a location via an exit with no location_id or to a location that doesn't exist, then call the create_location tool with a proposed name/description/footprint before narrating their arrival. 
+- If the player moves to a new location then use the update_character tool to update the players location.
 - If the player takes an action that would result in a change to items at the location then call the appropriate tool (add_item_to_location, move_item_to_character, move_item_to_location, remove_item)
 - If you describe an item or location or character in more detail then update the item or location description with the new details using update_location or update_item or update_character tools.
 - Characters behave autonomously and can move to a new location by themselves. They can make the choice to interact with the player even if the are being ignored. Characters or events may block a player from leaving the location if the story demands it.
