@@ -3,7 +3,6 @@
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Literal, Dict, List
-import os
 
 from pydantic import BaseModel, Field
 
@@ -191,18 +190,15 @@ class World(BaseModel):
         return self.characters.get(character_id)
 
     def save_to_file(self, file_path: str | Path) -> Path:
-        path = Path(file_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        from .world_markdown import save_world
 
-        tmp = path.with_suffix(f"{path.suffix}.tmp")
-        tmp.write_text(self.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(tmp, path)
-        return path
+        return save_world(self, Path(file_path))
 
     @classmethod
     def load_from_file(cls, file_path: str | Path) -> "World":
-        path = Path(file_path)
-        return cls.model_validate_json(path.read_text(encoding="utf-8"))
+        from .world_markdown import load_world
+
+        return load_world(Path(file_path))
 
     def render_ascii_map(self) -> str:
         """Render an ASCII map of the world's locations using box-drawing characters.

@@ -31,19 +31,19 @@ def _slugify_world_name(name: str) -> str:
 
 
 def _resolve_world_path(world_name: str, project_id: str) -> Path:
-    """Location of a world's JSON file.
+    """Location of a world's folder.
 
     When a project is selected (and still exists), the world lives inside that
-    project's folder under ``worlds/``. Otherwise it falls back to the shared
-    ``data/worlds/`` directory, so world_explorer keeps working without a
-    project.
+    project's folder under ``worlds/<name>/``. Otherwise it falls back to the
+    shared ``data/worlds/<name>/`` directory, so world_explorer keeps working
+    without a project.
     """
-    filename = f"{_slugify_world_name(world_name)}.json"
+    slug = _slugify_world_name(world_name)
     if project_id:
         project = get_project_store().get(project_id)
         if project is not None:
-            return Path(project.path) / "worlds" / filename
-    return get_chats_dir().parent / "worlds" / filename
+            return Path(project.path) / "worlds" / slug
+    return get_chats_dir().parent / "worlds" / slug
 
 
 def _render_world_story(world: World) -> str:
