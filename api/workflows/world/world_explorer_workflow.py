@@ -9,6 +9,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field
 
 from ...config import get_chats_dir
+from ...project_store import get_project_store
 from ...providers import ChatEvent, StreamComplete, get_client
 from ...schemas import Chat, Message
 from ...store import get_store
@@ -29,8 +30,20 @@ def _slugify_world_name(name: str) -> str:
     return slug or "world"
 
 
-def _default_world_path(world_name: str) -> Path:
-    return get_chats_dir().parent / "worlds" / f"{_slugify_world_name(world_name)}.json"
+def _resolve_world_path(world_name: str, project_id: str) -> Path:
+    """Location of a world's JSON file.
+
+    When a project is selected (and still exists), the world lives inside that
+    project's folder under ``worlds/``. Otherwise it falls back to the shared
+    ``data/worlds/`` directory, so world_explorer keeps working without a
+    project.
+    """
+    filename = f"{_slugify_world_name(world_name)}.json"
+    if project_id:
+        project = get_project_store().get(project_id)
+        if project is not None:
+            return Path(project.path) / "worlds" / filename
+    return get_chats_dir().parent / "worlds" / filename
 
 
 def _render_world_story(world: World) -> str:
@@ -142,7 +155,7 @@ async def _bootstrap_world(
     except Exception:
         pass
 
-    _WORLD_CACHE[_slugify_world_name(world_name)] = (world_path, world)
+    _WORLD_CACHE[str(world_path)] = (world_path, world)
 
 
 def _new_location() -> Location:
@@ -153,9 +166,10 @@ def _new_location() -> Location:
 async def _load_or_create_world(
     world_name: str,
     world_description: str,
+    project_id: str,
 ) -> tuple[Path, World, bool]:
-    cache_key = _slugify_world_name(world_name)
-    path = _default_world_path(world_name)
+    path = _resolve_world_path(world_name, project_id)
+    cache_key = str(path)
     cache_entry = _WORLD_CACHE.get(cache_key)
 
     if path.exists():
@@ -176,6 +190,11 @@ async def _load_or_create_world(
 class WorldExplorerSettings(BaseModel):
     model_config = ConfigDict()
 
+    project_id: str = Field(
+        default="",
+        description="Project that stores the world. When set, the world file is saved under this project's folder; otherwise it falls back to the shared data/worlds/ directory.",
+        json_schema_extra={"widget": "project_select"},
+    )
     model: str = Field(json_schema_extra={"widget": "model_select"})
     world_name: str = Field(
         default="New World",
@@ -205,6 +224,7 @@ class WorldExplorerWorkflow(Workflow):
         world_path, world, created = await _load_or_create_world(
             settings.world_name,
             settings.world_description,
+            settings.project_id,
         )
 
         if created:
@@ -234,8 +254,21 @@ class WorldExplorerWorkflow(Workflow):
             yield event
 
     def extra_context_chars(self, chat: Chat) -> int:
+        """Estimate the size of the world story injected each turn.
+
+        world_explorer has no static system prompt — its per-turn context is the
+        rendered world story — so we measure that. Best-effort: any failure
+        (no world yet, missing project) reports 0 rather than raising.
+        """
         settings = WorldExplorerSettings.model_validate(chat.workflow_settings)
-        return len(settings.system_prompt)
+        if not settings.world_name:
+            return 0
+        world_path = _resolve_world_path(settings.world_name, settings.project_id)
+        try:
+            world = World.load_from_file(world_path)
+            return len(_render_world_story(world))
+        except Exception:  # noqa: BLE001
+            return 0
 
     def get_state(self, chat: Chat) -> dict:
         """Return current world state for the UI: player location and ASCII map."""
@@ -244,11 +277,7 @@ class WorldExplorerWorkflow(Workflow):
         if not world_name:
             return {}
 
-        import re
-        from pathlib import Path
-
-        slug = re.sub(r"[^a-z0-9]+", "-", world_name.strip().lower()).strip("-") or "world"
-        world_path = _default_world_path(world_name)
+        world_path = _resolve_world_path(world_name, settings.project_id)
 
         try:
             world = World.load_from_file(world_path)
