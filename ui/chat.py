@@ -56,19 +56,19 @@ def _message_bubble(
     """
     with ui.row().classes("w-full items-start gap-3 no-wrap py-1"):
         with ui.column().classes("w-20 shrink-0 items-end gap-0 pt-2 select-none"):
-            name_color = "text-indigo-500" if is_user else "text-gray-400"
+            name_color = "text-[#5898d4]" if is_user else "text-gray-400"
             ui.label(name).classes(f"{name_color} text-xs font-medium")
             short, full = _format_time(timestamp)
             if short:
                 ui.label(short).classes("text-[10px] text-gray-400").tooltip(full)
         with ui.element("div").classes(
-            "bg-gray-100 rounded-2xl px-4 py-2 grow min-w-0 relative"
+            "bg-white/10 rounded-2xl px-4 py-2 grow min-w-0 relative"
         ):
             if on_delete is not None:
                 with ui.element("div").classes("absolute top-0 right-0 -mt-1 -mr-1"):
                     ui.button(
                         icon="close", on_click=on_delete,
-                    ).props("flat dense round size=xs color=grey-5").classes(
+                    ).props("flat dense round size=xs color=slate").classes(
                         "opacity-20 hover:opacity-100 transition-opacity"
                     ).tooltip("Remove from history")
             bubble = ui.element("div").classes("w-full")
@@ -319,8 +319,8 @@ def register_pages() -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-        ui.query("body").classes("m-0")
-        ui.colors(primary="#4f46e5")
+        ui.query("body").classes("m-0").style("background-color: rgb(24, 28, 33)")
+        ui.colors(primary="#5898d4")
         # Force an explicit full-viewport height down the layout chain so the
         # scroll area's flex-grow has real height to fill. Quasar only sets a
         # min-height on q-page, which flex-grow/height:100% can't chain off.
@@ -333,14 +333,14 @@ def register_pages() -> None:
         )
 
         # --- Header -------------------------------------------------------
-        with ui.header().classes("items-center justify-between"):
+        with ui.header().classes("items-center justify-between bg-indigo-900"):
             ui.label("LLM Test Harness").classes("text-lg font-semibold")
             provider_label = ui.label("").classes("text-sm opacity-80")
 
         # --- Left sidebar -------------------------------------------------
-        with ui.left_drawer(bordered=True).classes("bg-gray-50").props("width=280"):
+        with ui.left_drawer(bordered=True).classes("bg-[#2b323b]").props("width=280"):
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label("Projects").classes("text-sm font-medium text-gray-600")
+                ui.label("Projects").classes("text-sm font-medium text-gray-300")
                 ui.button(icon="add", on_click=lambda: open_add_project_dialog()).props(
                     "flat dense round size=sm"
                 ).tooltip("Add project")
@@ -349,7 +349,7 @@ def register_pages() -> None:
             ui.separator().classes("w-full my-3")
 
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label("Chats").classes("text-sm font-medium text-gray-600")
+                ui.label("Chats").classes("text-sm font-medium text-gray-300")
                 ui.button(icon="add", on_click=lambda: new_chat()).props(
                     "flat dense round size=sm"
                 )
@@ -362,7 +362,7 @@ def register_pages() -> None:
             streaming_spinners: dict[str, Any] = {}
 
         # --- Right sidebar: workflow settings ------------------------------
-        with ui.right_drawer(bordered=True).classes("bg-gray-50").props("width=280"):
+        with ui.right_drawer(bordered=True).classes("bg-[#2b323b]").props("width=280"):
 
             async def refresh_models() -> None:
                 try:
@@ -379,7 +379,7 @@ def register_pages() -> None:
                 update_context_usage()
 
             with ui.row().classes("w-full items-center justify-between no-wrap"):
-                ui.label("Workflow").classes("text-sm font-medium text-gray-600")
+                ui.label("Workflow").classes("text-sm font-medium text-gray-300")
                 ui.button(icon="refresh", on_click=lambda: refresh_model_options()).props(
                     "flat dense round size=sm"
                 ).tooltip("Refresh models")
@@ -391,7 +391,7 @@ def register_pages() -> None:
             ui.separator().classes("w-full my-2")
 
             # --- Context window ------------------------------------------
-            ui.label("Context").classes("text-sm font-medium text-gray-600")
+            ui.label("Context").classes("text-sm font-medium text-gray-300")
             usage_bar = ui.linear_progress(value=0.0, show_value=False).props(
                 "rounded"
             ).classes("w-full")
@@ -559,7 +559,7 @@ def register_pages() -> None:
                 usage_bar.props(f"color={'red' if near else 'primary'}")
                 usage_label.text = f"≈ {used:,} / {limit:,} tokens ({frac * 100:.0f}%)"
                 usage_label.classes(
-                    replace="text-xs " + ("text-red-500" if near else "text-gray-500")
+                    replace="text-xs " + ("text-[#ff0000]" if near else "text-gray-500")
                 )
             else:
                 usage_bar.set_visibility(False)
@@ -656,7 +656,7 @@ def register_pages() -> None:
                     return
                 for project in projects:
                     current = project.get("id") == state["project_id"]
-                    row_bg = "bg-indigo-100" if current else "hover:bg-gray-200"
+                    row_bg = "bg-[#5898d4]/30" if current else "hover:bg-white/10"
                     with ui.row().classes(
                         f"w-full items-center no-wrap gap-0 rounded {row_bg}"
                     ):
@@ -785,7 +785,7 @@ def register_pages() -> None:
                                 ui.markdown(
                                     f"**Result**\n\n```\n{content}\n```",
                                     extras=["fenced-code-blocks"],
-                                ).classes("text-gray-800 break-words max-w-full")
+                                ).classes("text-gray-200 break-words max-w-full")
                         continue
 
                     if msg["role"] == "assistant":
@@ -812,7 +812,7 @@ def register_pages() -> None:
                         if is_user:
                             # Keep user input verbatim (no markdown interpretation).
                             ui.label(body_parts[0][0]).classes(
-                                "text-gray-800 whitespace-pre-wrap break-words"
+                                "text-gray-200 whitespace-pre-wrap break-words"
                             )
                         else:
                             # Render assistant replies. Tool reports are verbatim, content is markdown.
@@ -830,12 +830,12 @@ def register_pages() -> None:
                                             ui.markdown(
                                                 part_text,
                                                 extras=["fenced-code-blocks", "tables"],
-                                            ).classes("text-gray-800 break-words max-w-full")
+                                            ).classes("text-gray-200 break-words max-w-full")
                                     else:
                                         ui.markdown(
                                             part_text,
                                             extras=["fenced-code-blocks", "tables"],
-                                        ).classes("text-gray-800 break-words max-w-full")
+                                        ).classes("text-gray-200 break-words max-w-full")
 
                     # After the last assistant message, append state for workflows that support it.
                     if idx == last_assistant_idx and state["chat_id"]:
@@ -873,7 +873,7 @@ def register_pages() -> None:
                     ui.label("No chats yet").classes("text-xs text-gray-400")
                 for c in chats:
                     current = c["id"] == state["chat_id"]
-                    row_bg = "bg-indigo-100" if current else "hover:bg-gray-200"
+                    row_bg = "bg-[#5898d4]/30" if current else "hover:bg-white/10"
                     with ui.row().classes(
                         f"w-full items-center no-wrap gap-0 rounded {row_bg}"
                     ):
@@ -1076,7 +1076,7 @@ def register_pages() -> None:
         # Track whether a stream is currently in progress
         is_streaming = {"value": False}
         
-        with ui.footer().classes("bg-white border-t p-2"):
+        with ui.footer().classes("bg-[#2b323b] border-t border-[#585b5f] p-2"):
             with ui.row().classes("w-full max-w-5xl mx-auto items-end gap-2 no-wrap"):
                 text_input = (
                     ui.textarea(placeholder="Type a message…")
@@ -1143,7 +1143,7 @@ def register_pages() -> None:
                                 )
                             spinner = ui.spinner(size="sm")
                             md = ui.markdown("", extras=["fenced-code-blocks"]).classes(
-                                "text-gray-800 break-words max-w-full"
+                                "text-gray-200 break-words max-w-full"
                             )
                 live.update(bubble=bubble, spinner=spinner, md=md, text="")
                 messages_area.scroll_to(percent=1.0)
@@ -1201,7 +1201,7 @@ def register_pages() -> None:
                             ui.markdown(
                                 f"**Result**\n\n```\n{result}\n```",
                                 extras=["fenced-code-blocks"],
-                            ).classes("text-gray-800 break-words max-w-full")
+                            ).classes("text-gray-200 break-words max-w-full")
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
@@ -1324,7 +1324,7 @@ def register_pages() -> None:
                 with messages_col:
                     with _message_bubble("You", is_user=True):
                         ui.label(question).classes(
-                            "text-gray-800 whitespace-pre-wrap break-words"
+                            "text-gray-200 whitespace-pre-wrap break-words"
                         )
                 view["ensure_bubble"]()
                 _wake_stream_poll()

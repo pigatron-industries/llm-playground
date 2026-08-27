@@ -20,7 +20,7 @@ app = FastAPI(title="LLM Test Harness")
 app.include_router(router)
 
 register_pages()
-ui.run_with(app, title="LLM Test Harness", storage_secret="llm-harness-dev")
+ui.run_with(app, title="LLM Test Harness", storage_secret="llm-harness-dev", dark=True)
 
 
 if __name__ == "__main__":
