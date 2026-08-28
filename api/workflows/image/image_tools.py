@@ -12,9 +12,8 @@ back to the built-in default. Generated images are saved under ``data/images``
 
 from __future__ import annotations
 
+import asyncio
 import base64
-import json
-import re
 import time
 from pathlib import Path
 
@@ -33,19 +32,11 @@ from .image_context import get_image_base, get_image_model
 
 MODELS_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 300.0  # image generation can take a while
+POLL_INTERVAL = 1.5  # seconds between job-status polls
 
 
 def _base() -> str:
     return get_image_api_url().rstrip("/")
-
-
-# --- Response extraction ---------------------------------------------------
-# The /api/generate response shape is API-specific, so we accept the common
-# ones: raw image bytes, a base64 string (optionally data-URI prefixed), a
-# URL, or JSON nesting any of those under well-known keys.
-
-_B64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
-_IMAGE_KEYS = ("image", "images", "b64_json", "output", "result", "data", "url", "image_url", "path")
 
 
 def _save_image(data: bytes, index: int) -> Path:
@@ -59,43 +50,6 @@ def _save_image(data: bytes, index: int) -> Path:
         counter += 1
     path.write_bytes(data)
     return path
-
-
-def _extract_image_values(payload: object) -> list[str]:
-    """Pull candidate image values (b64 strings, URLs, paths) out of a JSON
-    response, whatever shape it happens to use."""
-    if isinstance(payload, str):
-        return [payload]
-    if isinstance(payload, list):
-        values: list[str] = []
-        for entry in payload:
-            values.extend(_extract_image_values(entry))
-        return values
-    if isinstance(payload, dict):
-        for key in _IMAGE_KEYS:
-            if key in payload:
-                values = _extract_image_values(payload[key])
-                if values:
-                    return values
-    return []
-
-
-def _resolve_values(values: list[str]) -> list[str]:
-    """Turn raw values into final locations: saved local paths or URLs."""
-    resolved: list[str] = []
-    for index, value in enumerate(values, start=1):
-        value = value.strip()
-        if value.startswith(("http://", "https://")):
-            resolved.append(value)
-            continue
-        if _B64_RE.match(value):
-            data = base64.b64decode(value)
-            if data:
-                resolved.append(str(_save_image(data, index)))
-            continue
-        # Not b64, not a URL — treat as a server-side file path.
-        resolved.append(value)
-    return resolved
 
 
 # The diffusers-playground API returns an empty list when /api/models is
@@ -191,8 +145,43 @@ class GenerateImageArgs(BaseModel):
     batch: int = Field(default=1, ge=1, le=16, description="How many images to generate.")
 
 
+async def _poll_status(client: httpx.AsyncClient) -> dict:
+    """Fetch the image API's current job status (``GET /api/async``)."""
+    resp = await client.get(f"{_base()}/api/async")
+    if resp.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"GET /api/async returned {resp.status_code}", request=resp.request, response=resp
+        )
+    try:
+        data = resp.json()
+    except ValueError:
+        raise httpx.HTTPError(f"non-JSON response from /api/async: {resp.text[:200]}")
+    return data if isinstance(data, dict) else {}
+
+
+def _collect_images(status: dict) -> str:
+    """Save a finished job's base64 PNG images and report their local paths."""
+    images = status.get("images", [])
+    if not images:
+        return "Error: job finished but returned no images."
+    locations: list[str] = []
+    for index, entry in enumerate(images, start=1):
+        b64 = entry.get("image", "") if isinstance(entry, dict) else str(entry)
+        if not b64:
+            continue
+        try:
+            data = base64.b64decode(b64)
+        except ValueError as exc:
+            return f"Error: could not decode image from job status: {exc}"
+        if data:
+            locations.append(str(_save_image(data, index)))
+    if not locations:
+        return "Error: job finished but no decodable images were found."
+    return "Generated image(s) at: " + ", ".join(locations)
+
+
 @register_tool(GenerateImageArgs, description="Generate an image via the external image API and report where it was saved.", category="Image")
-def generate_image(
+async def generate_image(
     prompt: str,
     model: str | None = None,
     negprompt: str = "",
@@ -200,6 +189,14 @@ def generate_image(
     height: int = 512,
     batch: int = 1,
 ) -> str:
+    """Start a background generation job and poll it to completion.
+
+    Uses the image API's async endpoints (``POST /api/async/generate`` +
+    ``GET /api/async``): the start request returns immediately, and we poll the
+    shared job slot until it reports a terminal state. The poll loop is ``async``
+    (it awaits the sleep and each HTTP call), so the app's event loop — and the
+    UI it serves — stays responsive while the image renders.
+    """
     base = _base()
 
     # Resolve the model: explicit arg > context selection > first in list.
@@ -243,22 +240,21 @@ def generate_image(
     }
 
     try:
-        with httpx.Client(timeout=GENERATE_TIMEOUT) as client:
-            resp = client.post(f"{base}/api/generate", json=payload)
+        async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:
+            resp = await client.post(f"{base}/api/async/generate", json=payload)
+            if resp.status_code >= 400:
+                return f"Error: image API returned {resp.status_code}: {resp.text[:500]}"
+
+            deadline = time.monotonic() + GENERATE_TIMEOUT
+            while True:
+                status = await _poll_status(client)
+                state = status.get("status")
+                if state == "finished":
+                    return _collect_images(status)
+                if state == "error":
+                    return f"Error: generation failed: {status.get('error', 'unknown error')}"
+                if time.monotonic() >= deadline:
+                    return "Error: timed out waiting for the image job to finish."
+                await asyncio.sleep(POLL_INTERVAL)
     except httpx.HTTPError as exc:
         return f"Error: image API unreachable at {base}: {exc}"
-    if resp.status_code >= 400:
-        return f"Error: image API returned {resp.status_code}: {resp.text[:500]}"
-
-    if resp.headers.get("content-type", "").startswith("image/"):
-        return f"Generated image saved to {_save_image(resp.content, 1)}"
-
-    try:
-        data = resp.json()
-    except ValueError:
-        return f"Error: unexpected non-image, non-JSON response from {base}/api/generate"
-
-    locations = _resolve_values(_extract_image_values(data))
-    if not locations:
-        return f"Error: could not find an image in the API response: {json.dumps(data)[:500]}"
-    return "Generated image(s) at: " + ", ".join(locations)

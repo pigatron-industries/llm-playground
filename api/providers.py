@@ -198,7 +198,7 @@ class LLMClient:
                     except json.JSONDecodeError:
                         arguments = {}
                     yield ToolCallEvent(id=entry["id"], name=entry["name"], arguments=arguments)
-                    result = execute_tool(entry["name"], arguments)
+                    result = await execute_tool(entry["name"], arguments)
                     yield ToolResultEvent(name=entry["name"], result=result)
                     tool_message = Message(
                         role="tool",

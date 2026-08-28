@@ -11,8 +11,8 @@ from .registry import execute_registered_tool, get_tool_metadata
 __all__ = ["get_tools", "execute_tool", "set_project_root"]
 
 
-def execute_tool(name: str, arguments: dict) -> str:
-    return execute_registered_tool(name, arguments)
+async def execute_tool(name: str, arguments: dict) -> str:
+    return await execute_registered_tool(name, arguments)
 
 
 def get_tools(tool_types: list[str] | None = None) -> list[dict]:
