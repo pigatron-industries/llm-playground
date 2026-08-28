@@ -7,6 +7,7 @@ from per-chat settings."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,20 +22,15 @@ from .image_context import set_image_context
 
 TOOL_TYPES = ["Image"]
 
-SYSTEM_PROMPT = (
-    "You are an image-generation assistant. When the user asks you to create, "
-    "draw, or render an image, call the `generate_image` tool with a detailed "
-    "prompt. If the user does not name a model, use the one they selected in "
-    "the workflow settings (appended below). After a successful generation, "
-    "tell the user the image path or URL it was saved to."
-)
+SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "templates" / "system_prompt.md"
 
 
 def _system_prompt(settings: "ImageSettings") -> str:
-    """System prompt with the user's selected image model appended when set —
-    so the assistant uses it for ``generate_image`` without the user restating
-    it each turn. The settings form renders the base/model pickers for this."""
-    prompt = SYSTEM_PROMPT
+    """System prompt from ``templates/system_prompt.md`` with the user's selected
+    image model appended when set — so the assistant uses it for
+    ``generate_image`` without the user restating it each turn. The settings
+    form renders the base/model pickers for this."""
+    prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     if settings.image_model:
         base_note = f", base `{settings.image_base}`" if settings.image_base else ""
         prompt += (
