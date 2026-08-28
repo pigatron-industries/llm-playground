@@ -17,6 +17,7 @@ from ...tools import get_tools
 from ..base import Workflow, WorkflowContext
 from ..common import history_for_model
 from ..registry import register_workflow
+from .image_context import set_image_context
 
 TOOL_TYPES = ["Image"]
 
@@ -70,6 +71,8 @@ class ImageWorkflow(Workflow):
 
     async def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         settings = ImageSettings.model_validate(ctx.chat.workflow_settings)
+
+        set_image_context(base=settings.image_base, model=settings.image_model or None)
 
         conversation: list[Message] = [
             Message(role="system", content=_system_prompt(settings))

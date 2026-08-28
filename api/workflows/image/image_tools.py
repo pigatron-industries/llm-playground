@@ -21,8 +21,15 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from ...config import DEFAULT_MODEL_BASES, get_image_api_url, get_images_dir
+from ...config import (
+    DEFAULT_GENERATE_PARAMS,
+    DEFAULT_MODEL_BASES,
+    MODEL_BASE_PARAMS,
+    get_image_api_url,
+    get_images_dir,
+)
 from ...tools.registry import register_tool
+from .image_context import get_image_base, get_image_model
 
 MODELS_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 300.0  # image generation can take a while
@@ -179,8 +186,6 @@ class GenerateImageArgs(BaseModel):
     )
     prompt: str = Field(description="What to generate.")
     negprompt: str = Field(default="", description="What to avoid in the image.")
-    steps: int = Field(default=40, ge=1, description="Number of diffusion steps.")
-    cfgscale: float = Field(default=7.0, ge=0.0, description="Prompt-guidance (CFG) scale.")
     width: int = Field(default=512, ge=16, description="Image width in pixels.")
     height: int = Field(default=512, ge=16, description="Image height in pixels.")
     batch: int = Field(default=1, ge=1, le=16, description="How many images to generate.")
@@ -191,22 +196,39 @@ def generate_image(
     prompt: str,
     model: str | None = None,
     negprompt: str = "",
-    steps: int = 40,
-    cfgscale: float = 7.0,
     width: int = 512,
     height: int = 512,
     batch: int = 1,
 ) -> str:
     base = _base()
 
+    # Resolve the model: explicit arg > context selection > first in list.
+    ctx_model = get_image_model()
+    ctx_base = get_image_base()
     if model is None:
-        try:
-            models = _list_models(None)
-        except RuntimeError as exc:
-            return f"Error: no model specified and could not list models: {exc}"
+        model = ctx_model
+
+    try:
+        models = _list_models(ctx_base if ctx_base else None)
+    except RuntimeError as exc:
+        return f"Error: could not list models: {exc}"
+
+    if model is None:
         if not models:
             return "Error: no model specified and the API reported no models."
         model = models[0]["name"]
+
+    # Resolve the model's base to determine the correct inference parameters.
+    model_base = ctx_base or ""
+    if not model_base:
+        for m in models:
+            if m["name"] == model:
+                model_base = m["base"]
+                break
+
+    params = MODEL_BASE_PARAMS.get(model_base, DEFAULT_GENERATE_PARAMS)
+    steps = int(params["steps"])
+    cfgscale = float(params["cfgscale"])
 
     payload = {
         "prompt": prompt,

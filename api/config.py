@@ -100,13 +100,23 @@ DEFAULT_MODEL_BASES = (
     "flux",
     "sdxl_1_0",
     "sd_1_5",
-    "sd_3_0",
-    "kwai_kolors",
-    "auraflow",
     "krea",
     "zimage",
-    "pixart_sigma",
 )
+
+# Per-base inference parameters. The image-generation tool resolves the
+# correct steps and CFG scale from the selected model's base rather than
+# accepting them as tool parameters.
+MODEL_BASE_PARAMS: dict[str, dict[str, float]] = {
+    "flux": {"steps": 30, "cfgscale": 5.0},
+    "sdxl_1_0": {"steps": 30, "cfgscale": 5.0},
+    "sd_1_5": {"steps": 30, "cfgscale": 7.0},
+    "krea": {"steps": 30, "cfgscale": 5.0},
+    "zimage": {"steps": 10, "cfgscale": 0.0}
+}
+
+# Fallback when the model's base is not in MODEL_BASE_PARAMS.
+DEFAULT_GENERATE_PARAMS = {"steps": 30, "cfgscale": 7.0}
 
 
 # --- Storage --------------------------------------------------------------
