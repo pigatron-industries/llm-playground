@@ -41,6 +41,19 @@ async def get_workflows() -> list[dict]:
         return resp.json()
 
 
+async def get_image_models(base: str | None = None) -> dict:
+    """Return ``{"base": ..., "models": [{"name", "base"}, ...]}`` — the
+    image-generation models on the external image API for a given base model
+    (via the backend's ``/image/models`` proxy)."""
+    params = {}
+    if base is not None:
+        params["base"] = base
+    async with _client(20) as client:
+        resp = await client.get("/image/models", params=params or None)
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --- Projects --------------------------------------------------------------
 
 

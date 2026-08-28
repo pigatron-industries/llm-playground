@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 
@@ -31,6 +32,7 @@ from ..service import get_active_stream, handle_send_message, list_active_stream
 from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
+from ..workflows.image.image_tools import list_available_models
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger("llm_harness.routes")
@@ -65,6 +67,19 @@ async def list_models() -> ModelsResponse:
 @router.get("/workflows", response_model=list[WorkflowInfo])
 def list_available_workflows() -> list[WorkflowInfo]:
     return list_workflows()
+
+
+@router.get("/image/models")
+async def list_image_models(base: str | None = None) -> dict:
+    """List image-generation models on the external image API, optionally
+    filtered by ``base`` (e.g. ``flux``, ``sdxl_1_0``). Proxies the image
+    API's ``GET /api/models`` so the UI's model dropdown can be populated for
+    a chosen base model. ``502`` if the image API is unreachable."""
+    try:
+        models = await asyncio.to_thread(list_available_models, base)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"base": base, "models": models}
 
 
 # --- Stored chats ----------------------------------------------------------

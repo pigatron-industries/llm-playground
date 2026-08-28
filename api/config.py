@@ -78,6 +78,37 @@ def get_self_api_url() -> str:
     return os.getenv("SELF_API_URL", f"http://{get_host()}:{get_port()}/api")
 
 
+# --- Image generation API --------------------------------------------------
+
+DEFAULT_IMAGE_API_URL = "http://localhost:8070"
+
+
+def get_image_api_url() -> str:
+    """Base URL of the external image-generation API (the ``image`` workflow).
+
+    Override with the ``IMAGE_API_URL`` env var. Expects a base that exposes
+    ``/api/generate`` and ``/api/models`` (e.g. ``http://localhost:8070``).
+    """
+    return os.getenv("IMAGE_API_URL", DEFAULT_IMAGE_API_URL)
+
+
+# Well-known image-model families. The image API reports its models grouped by
+# this "base"; when none is specified it must be probed until one reports
+# models (see ``api.workflows.image.image_tools``). Shared with the UI, which
+# offers these as the base-model dropdown.
+DEFAULT_MODEL_BASES = (
+    "flux",
+    "sdxl_1_0",
+    "sd_1_5",
+    "sd_3_0",
+    "kwai_kolors",
+    "auraflow",
+    "krea",
+    "zimage",
+    "pixart_sigma",
+)
+
+
 # --- Storage --------------------------------------------------------------
 
 
@@ -99,3 +130,15 @@ def get_projects_file() -> Path:
     if raw:
         return Path(raw).expanduser()
     return PROJECT_ROOT / "data" / "projects.json"
+
+
+def get_images_dir() -> Path:
+    """Directory where generated images are saved.
+
+    Override with the ``IMAGES_DIR`` env var (relative paths resolve against
+    the working directory). Defaults to ``<project>/data/images``.
+    """
+    raw = os.getenv("IMAGES_DIR")
+    if raw:
+        return Path(raw).expanduser()
+    return PROJECT_ROOT / "data" / "images"
