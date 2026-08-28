@@ -17,6 +17,7 @@ the full conversation from the backend.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -91,6 +92,33 @@ def _assistant_tool_report(message: dict) -> tuple[str, bool]:
         arguments = call.get("arguments", "{}")
         lines.append(f"**Tool call:**\n```\n{name}\n{arguments}\n```")
     return ("\n\n".join(lines), True)
+
+
+# The naming ``_save_image`` uses (image-YYYYMMDD-HHMMSS-NN.png, plus an
+# optional -N collision suffix). Matching the bare filename — rather than a
+# specific URL form — means older persisted tool results that stored the
+# absolute path keep rendering too.
+_IMAGE_NAME_RE = re.compile(r"\bimage-\d{8}-\d{6}-\d{2}(?:-\d+)?\.png\b")
+
+
+def _image_urls(text: str) -> list[str]:
+    """Viewable URLs for any generated images referenced in a tool result."""
+    urls: list[str] = []
+    for name in _IMAGE_NAME_RE.findall(text or ""):
+        url = f"/api/images/{name}"
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _render_image_bubbles(container, urls: list[str]) -> None:
+    """One standalone bubble per generated image (see ``_image_urls``).
+
+    Must be called inside an explicit ``with <container>:`` block."""
+    for url in urls:
+        with container:
+            with _message_bubble("Image", is_user=False):
+                ui.image(url).classes("w-full max-w-xl rounded-lg")
 
 
 def _default_settings(
@@ -885,13 +913,15 @@ def register_pages() -> None:
                     is_user = msg["role"] == "user"
                     on_delete = lambda _, i=idx: delete_message_at(i)
                     if msg["role"] == "tool":
+                        content = msg.get("content", "")
                         with _message_bubble("Tool", is_user=False, timestamp=msg.get("created_at"), on_delete=on_delete):
-                            content = msg.get("content", "")
                             with ui.expansion("Tool Result", icon="build").classes("w-full"):
                                 ui.markdown(
                                     f"**Result**\n\n```\n{content}\n```",
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
+                        # Generated images get their own bubble(s).
+                        _render_image_bubbles(messages_col, _image_urls(content))
                         continue
 
                     if msg["role"] == "assistant":
@@ -1354,6 +1384,9 @@ def register_pages() -> None:
                                     f"**Result**\n\n```\n{result}\n```",
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
+                # Generated images get their own bubble(s), mirroring
+                # render_history's treatment of the persisted result.
+                _render_image_bubbles(messages_col, _image_urls(result))
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.

@@ -160,11 +160,16 @@ async def _poll_status(client: httpx.AsyncClient) -> dict:
 
 
 def _collect_images(status: dict) -> str:
-    """Save a finished job's base64 PNG images and report their local paths."""
+    """Save a finished job's base64 PNG images and report their URLs.
+
+    The URL (``/api/images/<file>``, served by the app's routes) is what goes
+    into the model's context — the UI recognises it in the tool result and
+    renders the image as its own bubble, so the user sees the picture rather
+    than a file path."""
     images = status.get("images", [])
     if not images:
         return "Error: job finished but returned no images."
-    locations: list[str] = []
+    urls: list[str] = []
     for index, entry in enumerate(images, start=1):
         b64 = entry.get("image", "") if isinstance(entry, dict) else str(entry)
         if not b64:
@@ -174,13 +179,13 @@ def _collect_images(status: dict) -> str:
         except ValueError as exc:
             return f"Error: could not decode image from job status: {exc}"
         if data:
-            locations.append(str(_save_image(data, index)))
-    if not locations:
+            urls.append(f"/api/images/{_save_image(data, index).name}")
+    if not urls:
         return "Error: job finished but no decodable images were found."
-    return "Generated image(s) at: " + ", ".join(locations)
+    return "Generated image(s) at: " + ", ".join(urls)
 
 
-@register_tool(GenerateImageArgs, description="Generate an image via the external image API and report where it was saved.", category="Image")
+@register_tool(GenerateImageArgs, description="Generate an image via the external image API and report its viewable URL.", category="Image")
 async def generate_image(
     prompt: str,
     model: str | None = None,

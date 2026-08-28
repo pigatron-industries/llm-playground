@@ -7,10 +7,11 @@ import logging
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from openai import APIConnectionError, APIStatusError
 from pydantic import ValidationError
 
+from ..config import get_images_dir
 from ..project_store import get_project_store
 from ..providers import get_client
 from ..schemas import (
@@ -80,6 +81,20 @@ async def list_image_models(base: str | None = None) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"base": base, "models": models}
+
+
+@router.get("/images/{filename}")
+def get_generated_image(filename: str) -> FileResponse:
+    """Serve a generated image by filename (``/api/images/<file>``).
+
+    The ``generate_image`` tool reports these URLs in its result so the UI can
+    render the image inline; the file itself lives in the shared images
+    directory (see ``get_images_dir``)."""
+    directory = get_images_dir().resolve()
+    path = (directory / filename).resolve()
+    if path.parent != directory or not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path)
 
 
 # --- Stored chats ----------------------------------------------------------
