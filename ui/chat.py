@@ -56,7 +56,8 @@ def _message_bubble(
     Returns the (empty) bubble element so the caller can fill it with the
     message text or a spinner.
     """
-    with ui.row().classes("w-full items-start gap-3 no-wrap py-1"):
+    row = ui.row().classes("w-full items-start gap-3 no-wrap py-1")
+    with row:
         with ui.column().classes("w-20 shrink-0 items-end gap-0 pt-2 select-none"):
             name_color = "text-[#5898d4]" if is_user else "text-gray-400"
             ui.label(name).classes(f"{name_color} text-xs font-medium")
@@ -74,6 +75,7 @@ def _message_bubble(
                         "opacity-20 hover:opacity-100 transition-opacity"
                     ).tooltip("Remove from history")
             bubble = ui.element("div").classes("w-full")
+    bubble.row = row  # stashed so callers can drop the whole row if it ends up unused
     return bubble
 
 
@@ -1230,6 +1232,7 @@ def register_pages() -> None:
             live: dict = {
                 "bubble": None, "spinner": None, "md": None, "text": "",
                 "reasoning_exp": None, "reasoning_md": None, "reasoning_text": "",
+                "tool_column": None, "tool_spinner": None,
             }
 
             def open_assistant_bubble() -> None:
@@ -1261,6 +1264,20 @@ def register_pages() -> None:
                     live["spinner"].delete()
                     live["spinner"] = None
 
+            def drop_bubble_if_empty() -> None:
+                """A tool call can arrive before the assistant bubble opened
+                for this round ever got any text or reasoning (the common
+                case — the model calls a tool before saying anything). Drop
+                the whole row rather than leave a blank "Assistant" bubble
+                sitting above the tool bubble."""
+                if live["bubble"] is not None and not live["text"] and not live["reasoning_text"]:
+                    hide_spinner()
+                    live["bubble"].row.delete()
+                    live["bubble"] = None
+                    live["md"] = None
+                else:
+                    hide_spinner()
+
             if not lazy:
                 open_assistant_bubble()
 
@@ -1289,23 +1306,54 @@ def register_pages() -> None:
             def on_tool_call(name: str, arguments: dict) -> None:
                 if active_view["token"] is not my_token:
                     return
-                ensure_bubble()
-                hide_spinner()
+                # The tool call gets its own bubble (mirroring render_history's
+                # separate "Tool" bubble) rather than being inlined into the
+                # assistant's text, and it carries its own spinner covering the
+                # window where execute_tool() runs server-side with no
+                # intermediate events — otherwise that wait looks like nothing
+                # is happening.
+                drop_bubble_if_empty()
                 args_str = "\n".join(f"  {key}={value}" for key, value in arguments.items())
-                live["text"] += f"**Tool call:**\n```\n{name}\n{args_str}\n```"
-                live["md"].set_content(live["text"])
+                with messages_col:
+                    bubble = _message_bubble("Tool", is_user=False)
+                    with bubble:
+                        column = ui.column().classes("w-full gap-2")
+                        with column:
+                            with ui.expansion("Tool Call", icon="build").classes("w-full"):
+                                ui.markdown(
+                                    f"**Tool call:**\n```\n{name}\n{args_str}\n```",
+                                    extras=["fenced-code-blocks"],
+                                ).classes("text-gray-200 break-words max-w-full")
+                            spinner = ui.spinner(size="sm")
+                live.update(tool_column=column, tool_spinner=spinner)
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
                 if active_view["token"] is not my_token:
                     return
-                with messages_col:
-                    with _message_bubble("Tool", is_user=False):
+                if live["tool_spinner"] is not None:
+                    live["tool_spinner"].delete()
+                    live["tool_spinner"] = None
+                if live["tool_column"] is not None:
+                    # Append the result into the same "Tool" bubble the call
+                    # opened, right below it.
+                    with live["tool_column"]:
                         with ui.expansion("Tool Result", icon="build").classes("w-full"):
                             ui.markdown(
                                 f"**Result**\n\n```\n{result}\n```",
                                 extras=["fenced-code-blocks"],
                             ).classes("text-gray-200 break-words max-w-full")
+                    live["tool_column"] = None
+                else:
+                    # No tracked call bubble (e.g. reattached mid-execution) —
+                    # fall back to a standalone result bubble.
+                    with messages_col:
+                        with _message_bubble("Tool", is_user=False):
+                            with ui.expansion("Tool Result", icon="build").classes("w-full"):
+                                ui.markdown(
+                                    f"**Result**\n\n```\n{result}\n```",
+                                    extras=["fenced-code-blocks"],
+                                ).classes("text-gray-200 break-words max-w-full")
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
