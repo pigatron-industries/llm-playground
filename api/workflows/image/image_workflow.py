@@ -55,11 +55,11 @@ class ImageSettings(BaseModel):
         description="The specific image model to generate with, chosen from the base above.",
         json_schema_extra={"widget": "image_model_select"},
     )
-    selected_loras: list[str] = Field(
-       default_factory=list,
-       description="LoRA names to apply, from the image API's lora list",
-       json_schema_extra={"widget": "lora_select"},
-   )
+    selected_loras: list[dict] = Field(
+        default_factory=list,
+        description="LoRAs to apply. Each entry is an object with 'name' and 'weight', e.g. {'name': 'mylora', 'weight': 1.0}",
+        json_schema_extra={"widget": "lora_select"},
+    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
@@ -74,6 +74,14 @@ class ImageWorkflow(Workflow):
         settings = ImageSettings.model_validate(ctx.chat.workflow_settings)
 
         set_image_context(base=settings.image_base, model=settings.image_model or None)
+        # Store selected LoRAs for this turn so image tools include them
+        try:
+            from .image_context import set_image_loras
+
+            set_image_loras(settings.selected_loras if settings.selected_loras else None)
+        except Exception:
+            # Non-fatal: if context helpers not available or settings malformed
+            pass
 
         conversation: list[Message] = [
             Message(role="system", content=_system_prompt(settings))

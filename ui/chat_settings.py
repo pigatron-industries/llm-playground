@@ -34,6 +34,8 @@ def _default_settings(
             settings[field_name] = models[0] if models else ""
         elif field_schema.get("type") == "boolean":
             settings[field_name] = False
+        elif field_schema.get("type") == "array":
+            settings[field_name] = []
         elif field_schema.get("type") in ("integer", "number"):
             settings[field_name] = 0
         else:
@@ -181,6 +183,81 @@ def _render_image_model_picker(
     return (lambda: base_select.value or "", lambda: model_select.value or last_known_model or "")
 
 
+def _render_lora_picker(
+    field_schema: dict,
+    value: Any,
+    on_change: Callable[[], None] | None,
+    base_getter: Callable[[], str] | None = None,
+) -> Callable[[], Any]:
+    label = field_schema.get("title") or "LoRAs"
+    description = field_schema.get("description")
+
+    selected = {entry.get("name"): float(entry.get("weight", 1.0)) for entry in (value or []) if isinstance(entry, dict)}
+
+    summary = ui.label(
+        ", ".join(f"{n}({w})" for n, w in selected.items()) or "(no LoRAs selected)"
+    )
+
+    dialog = ui.dialog()
+
+    async def _load_and_show():
+        base = base_getter() if base_getter is not None else None
+        try:
+            data = await client.get_image_loras(base)
+            names = data.get("loras", []) if isinstance(data, dict) else []
+        except Exception as exc:  # noqa: BLE001
+            ui.notify(f"Could not load LoRAs: {_error_detail(exc)}", type="negative")
+            names = []
+
+        # make the dialog wider and taller so each entry fits on one line
+        with dialog, ui.card().classes("w-[min(96vw,1100px)] h-[72vh] p-5"):
+            ui.label(label).classes("text-base font-semibold text-gray-100")
+            if description:
+                ui.label(description).classes("text-sm text-gray-400")
+            entries_container = ui.column().classes("gap-2 mt-2 max-h-[60vh] overflow-auto")
+
+            controls: dict[str, tuple] = {}
+            for name in names:
+                with entries_container:
+                    # keep checkbox & weight on a single row without wrapping
+                    row = ui.row().classes("items-center gap-4 no-wrap")
+                    with row:
+                        cb = ui.checkbox(name, value=(name in selected)).classes("min-w-0")
+                        weight = ui.number(value=selected.get(name, 1.0), min=0.0, step=0.1).props("dense").classes("w-32")
+                    controls[name] = (cb, weight)
+
+            with ui.row().classes("mt-4 w-full justify-end"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+
+                async def _save(_: Any = None) -> None:
+                    nonlocal selected
+                    new_selected: dict[str, float] = {}
+                    for n, (cb, weight) in controls.items():
+                        if cb.value:
+                            try:
+                                new_selected[n] = float(weight.value)
+                            except Exception:
+                                new_selected[n] = 1.0
+                    selected = new_selected
+                    summary.set_text(
+                        ", ".join(f"{n}({w})" for n, w in selected.items()) or "(no LoRAs selected)"
+                    )
+                    dialog.close()
+                    if on_change is not None:
+                        await on_change()
+
+                ui.button("Save", on_click=_save).props("unelevated")
+
+        dialog.open()
+
+    ui.button("Select LoRAs", on_click=lambda e: asyncio.create_task(_load_and_show())).classes("mr-2")
+
+    if description:
+        summary.tooltip(description)
+
+    return lambda: [{"name": n, "weight": w} for n, w in selected.items()]
+
+
 def _render_settings_form(
     schema: dict,
     models: list[str],
@@ -215,6 +292,20 @@ def _render_settings_form(
             handled.add(model_field)
             continue
         if field_name in handled:
+            continue
+        if field_schema.get("widget") == "lora_select":
+            # Try to find the image base getter if it was already rendered earlier
+            base_field = next(
+                (n for n, s in props.items() if s.get("widget") == "image_base_select"),
+                None,
+            )
+            base_getter = getters.get(base_field) if base_field is not None else (lambda: "")
+            getters[field_name] = _render_lora_picker(
+                field_schema,
+                values.get(field_name, field_schema.get("default")),
+                on_change,
+                base_getter,
+            )
             continue
         getters[field_name] = _render_settings_field(
             field_name,

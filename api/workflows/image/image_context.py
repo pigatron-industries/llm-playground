@@ -20,12 +20,23 @@ class ImageContext:
         self._model: ContextVar[str | None] = ContextVar(
             "image_context_model", default=None
         )
+        self._loras: ContextVar[list[dict] | None] = ContextVar(
+            "image_context_loras", default=None
+        )
 
     def set(self, base: str | None = None, model: str | None = None) -> None:
         if base is not None:
             self._base.set(base)
         if model is not None:
             self._model.set(model)
+
+    def set_loras(self, loras: list[dict] | None = None) -> None:
+        """Set the selected LoRAs for the current turn.
+
+        Expects a list of objects like {"name": .., "weight": ..} or None.
+        """
+        if loras is not None:
+            self._loras.set(loras)
 
     def get_base(self) -> str | None:
         return self._base.get()
@@ -36,6 +47,7 @@ class ImageContext:
     def reset(self) -> None:
         self._base.set(None)
         self._model.set(None)
+        self._loras.set(None)
 
 
 image_context = ImageContext()
@@ -46,9 +58,19 @@ def set_image_context(base: str | None = None, model: str | None = None) -> None
     image_context.set(base=base, model=model)
 
 
+def set_image_loras(loras: list[dict] | None = None) -> None:
+    """Set the LoRAs to apply for the current turn."""
+    image_context.set_loras(loras)
+
+
 def get_image_base() -> str | None:
     return image_context.get_base()
 
 
 def get_image_model() -> str | None:
     return image_context.get_model()
+
+
+def get_image_loras() -> list[dict] | None:
+    """Return the LoRAs set for the current turn, or None."""
+    return image_context._loras.get()

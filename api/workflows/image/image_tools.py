@@ -29,7 +29,7 @@ from ...config import (
     get_images_dir,
 )
 from ...tools.registry import register_tool
-from .image_context import get_image_base, get_image_model
+from .image_context import get_image_base, get_image_model, get_image_loras
 
 MODELS_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 300.0  # image generation can take a while
@@ -107,6 +107,48 @@ def list_available_models(base: str | None = None) -> list[dict]:
     UI, so they can list generation models without reaching into the private
     helpers above. Raises ``RuntimeError`` when the image API is unreachable."""
     return _list_models(base)
+
+
+def _parse_loras(payload: object) -> list[str]:
+    """Normalise a /api/loras response into a list of lora names."""
+    if isinstance(payload, list):
+        names: list[str] = []
+        for entry in payload:
+            if isinstance(entry, str):
+                names.append(entry)
+            elif isinstance(entry, dict):
+                # diffusers API may return mapping; try to extract a name-like key
+                name = entry.get("name") or entry.get("id") or entry.get("modelid")
+                if name:
+                    names.append(str(name))
+        return names
+    return []
+
+
+def _list_loras(base: str | None = None) -> list[str]:
+    """List available LoRAs from the image API, optionally filtered by base."""
+    params: dict[str, str] = {}
+    if base:
+        params["base"] = base
+    try:
+        with httpx.Client(timeout=MODELS_TIMEOUT) as client:
+            resp = client.get(f"{_base()}/api/loras", params=params or None)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"image API unreachable at {_base()}: {exc}")
+    if resp.status_code >= 400:
+        raise RuntimeError(f"GET /api/loras returned {resp.status_code}: {resp.text[:300]}")
+    try:
+        names = _parse_loras(resp.json())
+    except ValueError:
+        raise RuntimeError(f"non-JSON response from /api/loras: {resp.text[:300]}")
+    return names
+
+
+def list_available_loras(base: str | None = None) -> list[str]:
+    """Public accessor for the API routes (``GET /api/image/loras``) so the
+    UI can list available LoRAs for a chosen base model. Raises ``RuntimeError``
+    when the image API is unreachable."""
+    return _list_loras(base)
 
 
 # --- Tools -----------------------------------------------------------------
@@ -247,6 +289,27 @@ async def generate_image(
         "models": [{"name": model, "weight": 1.0}],
         "loras": [],
     }
+
+    # Include any LoRAs stored in the per-turn image context
+    try:
+        selected_loras = get_image_loras()
+        if selected_loras:
+            loralist: list[dict] = []
+            for entry in selected_loras:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("name") or entry.get("id")
+                if not name:
+                    continue
+                try:
+                    weight = float(entry.get("weight", 1.0))
+                except Exception:
+                    weight = 1.0
+                loralist.append({"name": name, "weight": weight})
+            payload["loras"] = loralist
+    except Exception:
+        # best-effort: if context unavailable, continue without loras
+        pass
 
     try:
         async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:

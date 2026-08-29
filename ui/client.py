@@ -54,6 +54,19 @@ async def get_image_models(base: str | None = None) -> dict:
         return resp.json()
 
 
+async def get_image_loras(base: str | None = None) -> dict:
+    """Return ``{"base": ..., "loras": [...]}`` — the LoRAs available on the
+    external image API for a given base (via the backend's ``/image/loras``
+    proxy)."""
+    params = {}
+    if base is not None:
+        params["base"] = base
+    async with _client(20) as client:
+        resp = await client.get("/image/loras", params=params or None)
+        resp.raise_for_status()
+        return resp.json()
+
+
 # --- Projects --------------------------------------------------------------
 
 

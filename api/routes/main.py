@@ -34,6 +34,7 @@ from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
 from ..workflows.image.image_tools import list_available_models
+from ..workflows.image.image_tools import list_available_loras
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger("llm_harness.routes")
@@ -81,6 +82,21 @@ async def list_image_models(base: str | None = None) -> dict:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"base": base, "models": models}
+
+
+@router.get("/image/loras")
+async def list_image_loras(base: str | None = None) -> dict:
+    """List LoRAs on the external image API, optionally filtered by base.
+
+    Proxies the image API's ``GET /api/loras`` so the UI can populate a
+    LoRA picker for the chosen base model. Returns ``502`` if the image API
+    is unreachable.
+    """
+    try:
+        loras = await asyncio.to_thread(list_available_loras, base)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"base": base, "loras": loras}
 
 
 @router.get("/images/{filename}")
