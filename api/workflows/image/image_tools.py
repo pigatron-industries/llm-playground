@@ -242,9 +242,10 @@ async def generate_image(
     UI it serves — stays responsive while the image renders.
     """
 
+    ctx_base = get_image_base()
     ctx_model = get_image_model()
 
-    params = MODEL_BASE_PARAMS.get(ctx_model, DEFAULT_GENERATE_PARAMS)
+    params = MODEL_BASE_PARAMS.get(ctx_base, DEFAULT_GENERATE_PARAMS)
     steps = int(params["steps"])
     cfgscale = float(params["cfgscale"])
 
