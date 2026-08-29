@@ -18,7 +18,7 @@ from ...tools import get_tools
 from ..base import Workflow, WorkflowContext
 from ..common import history_for_model
 from ..registry import register_workflow
-from .image_context import set_image_context
+from .image_context import get_image_previous_prompt, set_image_context
 
 TOOL_TYPES = ["Image"]
 
@@ -27,17 +27,26 @@ SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "templates" / "system_pro
 
 def _system_prompt(settings: "ImageSettings") -> str:
     """System prompt from ``templates/system_prompt.md`` with the user's selected
-    image model appended when set — so the assistant uses it for
-    ``generate_image`` without the user restating it each turn. The settings
-    form renders the base/model pickers for this."""
+    image model, recent prompt, and LoRAs appended when set — so the assistant
+    uses them for ``generate_image`` without the user restating them each turn.
+    The settings form renders the base/model pickers for this."""
     prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    previous_prompt = get_image_previous_prompt()
+    if previous_prompt:
+        prompt += f"\n\nThe previous image prompt was: {previous_prompt}"
     if settings.image_model:
         base_note = f", base `{settings.image_base}`" if settings.image_base else ""
         prompt += (
-            f"\n\nThe user has selected the image model `{settings.image_model}`"
-            f"{base_note}. Use this model for the `generate_image` tool unless the "
-            "user explicitly asks for a different one."
+            f"\n\nThe user has selected the image model `{settings.image_model}`{base_note}."
         )
+    if settings.selected_loras:
+        lora_names = ", ".join(
+            f"{entry.get('name', 'unknown')} ({entry.get('weight', 1.0)})"
+            for entry in settings.selected_loras
+            if isinstance(entry, dict) and entry.get("name")
+        )
+        if lora_names:
+            prompt += f"\n\nSelected LoRAs: {lora_names}."
     return prompt
 
 
@@ -73,7 +82,11 @@ class ImageWorkflow(Workflow):
     async def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         settings = ImageSettings.model_validate(ctx.chat.workflow_settings)
 
-        set_image_context(base=settings.image_base, model=settings.image_model or None)
+        set_image_context(
+            base=settings.image_base,
+            model=settings.image_model or None,
+            previous_prompt=get_image_previous_prompt(),
+        )
         # Store selected LoRAs for this turn so image tools include them
         try:
             from .image_context import set_image_loras

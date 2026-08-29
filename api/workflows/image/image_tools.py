@@ -29,7 +29,12 @@ from ...config import (
     get_images_dir,
 )
 from ...tools.registry import register_tool
-from .image_context import get_image_base, get_image_model, get_image_loras
+from .image_context import (
+    get_image_base,
+    get_image_model,
+    get_image_loras,
+    set_image_context,
+)
 
 MODELS_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 300.0  # image generation can take a while
@@ -244,6 +249,7 @@ async def generate_image(
 
     ctx_base = get_image_base()
     ctx_model = get_image_model()
+    set_image_context(base=ctx_base, model=ctx_model, previous_prompt=prompt)
 
     params = MODEL_BASE_PARAMS.get(ctx_base, DEFAULT_GENERATE_PARAMS)
     steps = int(params["steps"])
@@ -282,8 +288,6 @@ async def generate_image(
     except Exception:
         # best-effort: if context unavailable, continue without loras
         pass
-
-    print(payload["loras"])
 
     try:
         async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:
