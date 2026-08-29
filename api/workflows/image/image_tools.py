@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import time
 from pathlib import Path
 
@@ -159,13 +160,14 @@ async def _poll_status(client: httpx.AsyncClient) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _collect_images(status: dict) -> str:
-    """Save a finished job's base64 PNG images and report their URLs.
+def _collect_images(status: dict, prompt: str, negprompt: str | None) -> str:
+    """Save a finished job's base64 PNG images and report them with metadata.
 
-    The URL (``/api/images/<file>``, served by the app's routes) is what goes
-    into the model's context — the UI recognises it in the tool result and
-    renders the image as its own bubble, so the user sees the picture rather
-    than a file path."""
+    The result carries each image's URL (``/api/images/<file>``, served by the
+    app's routes) plus the prompt / negative prompt in a single ``[image_meta]``
+    JSON line. Both go into the model's context and persist with the chat —
+    the UI parses that line to render the image as its own bubble and to show
+    the prompts in a popup."""
     images = status.get("images", [])
     if not images:
         return "Error: job finished but returned no images."
@@ -182,7 +184,8 @@ def _collect_images(status: dict) -> str:
             urls.append(f"/api/images/{_save_image(data, index).name}")
     if not urls:
         return "Error: job finished but no decodable images were found."
-    return "Generated image(s) at: " + ", ".join(urls)
+    metadata = [{"url": url, "prompt": prompt, "negative_prompt": negprompt} for url in urls]
+    return f"[image_meta] {json.dumps(metadata, ensure_ascii=False)}"
 
 
 @register_tool(GenerateImageArgs, description="Generate an image via the external image API and report its viewable URL.", category="Image")
@@ -239,6 +242,7 @@ async def generate_image(
         "cfgscale": cfgscale,
         "width": width,
         "height": height,
+        "scheduler": "EulerDiscreteScheduler",
         "batch": batch,
         "models": [{"name": model, "weight": 1.0}],
         "loras": [],
@@ -255,7 +259,7 @@ async def generate_image(
                 status = await _poll_status(client)
                 state = status.get("status")
                 if state == "finished":
-                    return _collect_images(status)
+                    return _collect_images(status, prompt, negprompt or None)
                 if state == "error":
                     return f"Error: generation failed: {status.get('error', 'unknown error')}"
                 if time.monotonic() >= deadline:

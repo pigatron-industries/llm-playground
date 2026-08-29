@@ -17,6 +17,7 @@ the full conversation from the backend.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -101,24 +102,105 @@ def _assistant_tool_report(message: dict) -> tuple[str, bool]:
 _IMAGE_NAME_RE = re.compile(r"\bimage-\d{8}-\d{6}-\d{2}(?:-\d+)?\.png\b")
 
 
-def _image_urls(text: str) -> list[str]:
-    """Viewable URLs for any generated images referenced in a tool result."""
-    urls: list[str] = []
+def _parse_image_meta(line: str) -> list[dict] | None:
+    """Extract the ``[image_meta]`` JSON payload from a tool-result line.
+
+    Each item maps an image URL to its prompt / negative prompt. Returns the
+    valid items, or ``None`` when the line carries no usable metadata."""
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", line):
+        try:
+            payload, _ = decoder.raw_decode(line, match.start())
+        except ValueError:
+            continue
+        valid = [
+            item for item in (payload if isinstance(payload, list) else [])
+            if isinstance(item, dict)
+            and isinstance(item.get("url"), str)
+            and _IMAGE_NAME_RE.fullmatch(item["url"].rsplit("/", 1)[-1])
+        ]
+        if valid:
+            return valid
+    return None
+
+
+def _image_entries(text: str) -> list[dict]:
+    """Per-image entries (``url``, ``prompt``, ``negative_prompt``) for a tool result.
+
+    New results carry an ``[image_meta]`` JSON line; older persisted results
+    only mention the filename, so those fall back to entries without prompts."""
+    entries: list[dict] = []
+    for line in (text or "").splitlines():
+        if "image_meta" not in line:
+            continue
+        for item in _parse_image_meta(line) or []:
+            name = item["url"].rsplit("/", 1)[-1]
+            entries.append(
+                {
+                    "url": f"/api/images/{name}",
+                    "prompt": item.get("prompt") or None,
+                    "negative_prompt": item.get("negative_prompt") or None,
+                }
+            )
     for name in _IMAGE_NAME_RE.findall(text or ""):
         url = f"/api/images/{name}"
-        if url not in urls:
-            urls.append(url)
-    return urls
+        if url not in {entry["url"] for entry in entries}:
+            entries.append({"url": url, "prompt": None, "negative_prompt": None})
+    return entries
 
 
-def _render_image_bubbles(container, urls: list[str]) -> None:
-    """One standalone bubble per generated image (see ``_image_urls``).
+def _show_prompt_dialog(entry: dict) -> None:
+    """Popup showing the prompt(s) recorded for one generated image."""
+    with ui.dialog() as dialog, ui.card().classes("w-[min(92vw,560px)] p-5"):
+        ui.label("Image Prompt").classes("text-base font-semibold text-gray-100")
+        if entry.get("prompt"):
+            ui.label(entry["prompt"]).classes("mt-2 whitespace-pre-wrap break-words text-sm text-gray-300")
+        else:
+            ui.label("(no prompt recorded)").classes("mt-2 italic text-sm text-gray-500")
+        if entry.get("negative_prompt"):
+            ui.label("Negative Prompt").classes("mt-4 text-sm font-semibold text-gray-400")
+            ui.label(entry["negative_prompt"]).classes(
+                "whitespace-pre-wrap break-words text-sm text-gray-300"
+            )
+        with ui.row().classes("mt-5 w-full justify-end"):
+            ui.button("Close", on_click=dialog.close).props("flat")
+    dialog.open()
 
-    Must be called inside an explicit ``with <container>:`` block."""
-    for url in urls:
+
+def _show_image_overlay(url: str) -> None:
+    """Full-screen image lightbox.
+
+    The image is scaled to fill the viewport (preserving aspect ratio) so it shows
+    at full resolution — larger than the bubble it was clicked from. Clicking
+    anywhere on the overlay dismisses it."""
+    with ui.dialog() as dialog, ui.card().classes(
+        "bg-transparent border-none p-0 shadow-none cursor-zoom-out"
+    ).style("width:100vw; height:100vh").on("click", lambda: dialog.close()):
+        ui.image(url).style("width:100%; height:100%; object-fit:contain")
+    dialog.open()
+
+
+def _render_image_bubbles(container, entries: list[dict]) -> None:
+    """One standalone bubble per generated image (see ``_image_entries``).
+
+    Each image is clickable — it opens a full-size overlay
+    (``_show_image_overlay``) that a second click dismisses. Images recorded
+    with prompt metadata also get a flat "Prompt" button that opens
+    ``_show_prompt_dialog``. Must be called inside an explicit
+    ``with <container>:`` block."""
+    for entry in entries:
         with container:
             with _message_bubble("Image", is_user=False):
-                ui.image(url).classes("w-full max-w-xl rounded-lg")
+                ui.image(entry["url"]).classes(
+                    "w-full max-w-xl rounded-lg cursor-zoom-in"
+                ).on("click", lambda e, u=entry["url"]: _show_image_overlay(u))
+                if entry.get("prompt") or entry.get("negative_prompt"):
+                    with ui.row().classes("mt-1.5"):
+                        ui.button(
+                            "Prompt",
+                            icon="description",
+                            on_click=lambda e, item=entry: _show_prompt_dialog(item),
+                        ).props("flat dense size=sm").classes("text-gray-300")
 
 
 def _default_settings(
@@ -920,8 +1002,9 @@ def register_pages() -> None:
                                     f"**Result**\n\n```\n{content}\n```",
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
-                        # Generated images get their own bubble(s).
-                        _render_image_bubbles(messages_col, _image_urls(content))
+                        # Generated images get their own bubble(s), with a
+                        # Prompt button when the result recorded one.
+                        _render_image_bubbles(messages_col, _image_entries(content))
                         continue
 
                     if msg["role"] == "assistant":
@@ -1384,9 +1467,10 @@ def register_pages() -> None:
                                     f"**Result**\n\n```\n{result}\n```",
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
-                # Generated images get their own bubble(s), mirroring
+                # Generated images get their own bubble(s), with a Prompt
+                # button when the result recorded one — mirroring
                 # render_history's treatment of the persisted result.
-                _render_image_bubbles(messages_col, _image_urls(result))
+                _render_image_bubbles(messages_col, _image_entries(result))
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
