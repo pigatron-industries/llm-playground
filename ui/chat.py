@@ -173,14 +173,7 @@ def _show_image_overlay(url: str) -> None:
 
     The image is scaled to fill the viewport (preserving aspect ratio) so it shows
     at full resolution — larger than the bubble it was clicked from. Clicking
-    anywhere on the overlay dismisses it."""
-    # Show the image at its natural size (1:1) when possible. Center it
-    # and allow scrolling/panning if the image is larger than the viewport
-    # so it is not cropped. Clicking anywhere dismisses the overlay.
-    # Use a raw <img> with an onload handler that sets the displayed size to
-    # the image's natural pixel dimensions adjusted for devicePixelRatio
-    # (so a 1024px-wide image on a 2x DPR screen will display as 512 CSS px)
-    # and allow scrolling when the image is larger than the viewport.
+    anywhere on the overlay — including on the image itself — dismisses it."""
     img_id = f"overlay-img-{uuid.uuid4().hex}"
     img_html = (
         f"<img id=\"{img_id}\" src=\"{url}\" "
@@ -189,9 +182,9 @@ def _show_image_overlay(url: str) -> None:
 
     with ui.dialog() as dialog:
         wrapper = (
-            f'<div style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center; overflow:auto; background:transparent; cursor:zoom-out" onclick="if(event.target===this) this.closest(\'dialog\').close();">{img_html}</div>'
+            f'<div style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center; overflow:auto; background:transparent; cursor:zoom-out">{img_html}</div>'
         )
-        ui.html(wrapper)
+        ui.html(wrapper).on("click", dialog.close)
     dialog.open()
 
 
