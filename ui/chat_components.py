@@ -83,12 +83,16 @@ def _image_entries(text: str) -> list[dict]:
                     "url": f"/api/images/{name}",
                     "prompt": item.get("prompt") or None,
                     "negative_prompt": item.get("negative_prompt") or None,
+                    "width": item.get("width") or None,
+                    "height": item.get("height") or None,
                 }
             )
     for name in _IMAGE_NAME_RE.findall(text or ""):
         url = f"/api/images/{name}"
         if url not in {entry["url"] for entry in entries}:
-            entries.append({"url": url, "prompt": None, "negative_prompt": None})
+            entries.append(
+                {"url": url, "prompt": None, "negative_prompt": None, "width": None, "height": None}
+            )
     return entries
 
 
@@ -103,6 +107,10 @@ def _show_prompt_dialog(entry: dict) -> None:
             ui.label("Negative Prompt").classes("mt-4 text-sm font-semibold text-gray-400")
             ui.label(entry["negative_prompt"]).classes(
                 "whitespace-pre-wrap break-words text-sm text-gray-300"
+            )
+        if entry.get("width") and entry.get("height"):
+            ui.label(f"Size: {entry['width']} × {entry['height']}").classes(
+                "mt-3 text-xs text-gray-500"
             )
         with ui.row().classes("mt-5 w-full justify-end"):
             ui.button("Close", on_click=dialog.close).props("flat")
@@ -124,7 +132,9 @@ def _show_image_overlay(url: str) -> None:
     dialog.open()
 
 
-def _render_image_bubbles(container, entries: list[dict]) -> None:
+def _render_image_bubbles(
+    container, entries: list[dict], on_rerun: Callable[[dict, Any], Any] | None = None
+) -> None:
     for entry in entries:
         with container:
             with _message_bubble("Image", is_user=False):
@@ -133,6 +143,20 @@ def _render_image_bubbles(container, entries: list[dict]) -> None:
                 ).on("click", lambda e, u=entry["url"]: _show_image_overlay(u))
                 if entry.get("prompt") or entry.get("negative_prompt"):
                     with ui.row().classes("mt-1.5"):
+                        if on_rerun is not None and entry.get("prompt"):
+                            rerun_btn = ui.button(
+                                "Rerun",
+                                icon="refresh",
+                            ).props("flat dense size=sm").classes("text-gray-300")
+                            # Bound after creation so the default captures the
+                            # button itself (it disables itself while running).
+                            rerun_btn.on(
+                                "click",
+                                lambda e, item=entry, btn=rerun_btn: on_rerun(item, btn),
+                            )
+                            rerun_btn.tooltip(
+                                "Regenerate with the same prompt, size, model and LoRAs"
+                            )
                         ui.button(
                             "Prompt",
                             icon="description",

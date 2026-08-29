@@ -140,6 +140,20 @@ class SendMessageRequest(BaseModel):
     content: str
 
 
+class RerunImageRequest(BaseModel):
+    """Rerun image generation with the exact parameters recorded on a
+    previously generated image (the ``[image_meta]`` line the
+    ``generate_image`` tool produces). No LLM round-trip is involved — the
+    backend calls the image tool directly. ``width``/``height`` are optional
+    so images generated before they were recorded can still be rerun
+    (they fall back to the tool's defaults)."""
+
+    prompt: str
+    negative_prompt: str = ""
+    width: int | None = Field(default=None, ge=16)
+    height: int | None = Field(default=None, ge=16)
+
+
 class ContextEstimate(BaseModel):
     """Best-effort size of the extra context (system prompt, injected files,
     ...) a workflow adds beyond the visible chat history — see

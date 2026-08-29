@@ -585,8 +585,9 @@ def register_pages() -> None:
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
                         # Generated images get their own bubble(s), with a
-                        # Prompt button when the result recorded one.
-                        _render_image_bubbles(messages_col, _image_entries(content))
+                        # Prompt button when the result recorded one and a
+                        # Rerun button when it recorded a prompt.
+                        _render_image_bubbles(messages_col, _image_entries(content), on_rerun=rerun_image)
                         continue
 
                     if msg["role"] == "assistant":
@@ -1050,9 +1051,10 @@ def register_pages() -> None:
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
                 # Generated images get their own bubble(s), with a Prompt
-                # button when the result recorded one — mirroring
-                # render_history's treatment of the persisted result.
-                _render_image_bubbles(messages_col, _image_entries(result))
+                # button when the result recorded one and a Rerun button
+                # when it recorded a prompt — mirroring render_history's
+                # treatment of the persisted result.
+                _render_image_bubbles(messages_col, _image_entries(result), on_rerun=rerun_image)
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
@@ -1067,6 +1069,60 @@ def register_pages() -> None:
                 "hide_spinner": hide_spinner,
                 "ensure_bubble": ensure_bubble,
             }
+
+        async def rerun_image(entry: dict, button: Any = None) -> None:
+            """Regenerate an image with the exact parameters recorded on it.
+
+            The backend calls the image tool directly (no LLM round-trip) and
+            appends the result to this chat's history. A placeholder bubble
+            with a spinner appears immediately; once the call returns, the
+            history is resynced from the server (like the end of a normal
+            send()), which replaces the placeholder with the real image
+            bubble — no page refresh needed."""
+            if not state["chat_id"]:
+                ui.notify("Create a chat first.", type="warning")
+                return
+            if not entry.get("prompt"):
+                ui.notify("No prompt recorded on this image to rerun.", type="warning")
+                return
+            if is_streaming["value"]:
+                ui.notify("A response is still generating — wait for it to finish first.", type="warning")
+                return
+            own_chat_id = state["chat_id"]
+            if button is not None:
+                button.disable()
+            # The result gets appended at the end of the history, so show the
+            # placeholder bubble there — immediate feedback while the (potentially
+            # long) generation runs.
+            with messages_col:
+                placeholder = _message_bubble("Image", is_user=False)
+                with placeholder:
+                    with ui.column().classes("w-full items-center gap-1 py-3"):
+                        ui.spinner(size="xl")
+                        ui.label("Generating image…").classes("text-xs text-gray-500")
+            messages_area.scroll_to(percent=1.0)
+            try:
+                updated = await client.rerun_image(
+                    own_chat_id,
+                    entry["prompt"],
+                    entry.get("negative_prompt"),
+                    entry.get("width"),
+                    entry.get("height"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                placeholder.row.delete()
+                ui.notify(f"Rerun failed: {_error_detail(exc)}", type="negative", multi_line=True)
+                return
+            finally:
+                if button is not None:
+                    button.enable()
+            if state["chat_id"] != own_chat_id:
+                # Switched chats mid-generation — the result is persisted
+                # server-side and shows when that chat is opened again; don't
+                # clobber whatever is on screen now.
+                return
+            await set_history(updated["messages"])
+            await render_chat_list()
 
         async def send() -> None:
             content = (text_input.value or "").strip()

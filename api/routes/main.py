@@ -25,6 +25,7 @@ from ..schemas import (
     ModelsResponse,
     Project,
     ProviderInfo,
+    RerunImageRequest,
     SendMessageRequest,
     UpdateChatRequest,
     WorkflowInfo,
@@ -33,8 +34,10 @@ from ..service import get_active_stream, handle_send_message, list_active_stream
 from ..service.chat import request_stream_stop
 from ..store import get_store
 from ..workflows import get_workflow, list_workflows
-from ..workflows.image.image_tools import list_available_models
+from ..workflows.image.image_context import set_image_context, set_image_loras
+from ..workflows.image.image_tools import generate_image, list_available_models
 from ..workflows.image.image_tools import list_available_loras
+from ..workflows.image.image_workflow import ImageSettings
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger("llm_harness.routes")
@@ -281,6 +284,59 @@ async def send_message(chat_id: str, req: SendMessageRequest) -> StreamingRespon
             raise HTTPException(status_code=404, detail="Chat not found") from exc
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+@router.post("/chats/{chat_id}/rerun-image", response_model=Chat)
+async def rerun_image(chat_id: str, req: RerunImageRequest) -> Chat:
+    """Regenerate an image with the exact parameters recorded on a previous
+    one — prompt, negative prompt, width and height all come from the
+    image's own metadata (the UI's Rerun button), so no LLM round-trip is
+    needed. The base model / image model / LoRAs come from the chat's
+    current image-workflow settings. The result is appended to the chat's
+    history as a tool message — the same shape a normal ``generate_image``
+    result has, so it renders as its own image bubble — and the updated
+    chat is returned."""
+    store = get_store()
+    chat = store.get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if chat.workflow_id != "image":
+        raise HTTPException(status_code=400, detail="Rerun is only available in the image workflow.")
+    if get_active_stream(chat_id) is not None:
+        raise HTTPException(status_code=409, detail="A response is still generating for this chat.")
+
+    # Resolve the image context the same way the workflow's turn would, so
+    # the tool call below uses the chat's selected base/model/LoRAs. The
+    # ``model`` (chat LLM) field is required by the schema but irrelevant
+    # here — tolerate a settings dict missing it rather than failing the
+    # rerun over something we don't use.
+    try:
+        settings = ImageSettings.model_validate(chat.workflow_settings)
+    except ValidationError:
+        try:
+            settings = ImageSettings.model_validate({**chat.workflow_settings, "model": ""})
+        except ValidationError:
+            settings = ImageSettings.model_validate({"model": ""})
+    set_image_context(base=settings.image_base, model=settings.image_model or None)
+    set_image_loras(settings.selected_loras or None)
+
+    result = await generate_image(
+        prompt=req.prompt,
+        negprompt=req.negative_prompt,
+        width=req.width or 512,
+        height=req.height or 512,
+    )
+    if result.startswith("Error:"):
+        raise HTTPException(
+            status_code=502,
+            detail=result.removeprefix("Error:").strip() or "Image generation failed.",
+        )
+
+    store.add_message(chat_id, Message(role="tool", content=result))
+    updated = store.get(chat_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return updated
 
 
 @router.get("/chats/{chat_id}/stream")

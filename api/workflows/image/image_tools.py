@@ -203,14 +203,15 @@ async def _poll_status(client: httpx.AsyncClient) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _collect_images(status: dict, prompt: str, negprompt: str | None) -> str:
+def _collect_images(status: dict, prompt: str, negprompt: str | None, width: int, height: int) -> str:
     """Save a finished job's base64 PNG images and report them with metadata.
 
     The result carries each image's URL (``/api/images/<file>``, served by the
-    app's routes) plus the prompt / negative prompt in a single ``[image_meta]``
-    JSON line. Both go into the model's context and persist with the chat —
-    the UI parses that line to render the image as its own bubble and to show
-    the prompts in a popup."""
+    app's routes) plus the prompt / negative prompt / size in a single
+    ``[image_meta]`` JSON line. Both go into the model's context and persist
+    with the chat — the UI parses that line to render the image as its own
+    bubble, to show the prompts in a popup, and to rerun the generation with
+    the exact same parameters."""
     images = status.get("images", [])
     if not images:
         return "Error: job finished but returned no images."
@@ -227,7 +228,10 @@ def _collect_images(status: dict, prompt: str, negprompt: str | None) -> str:
             urls.append(f"/api/images/{_save_image(data, index).name}")
     if not urls:
         return "Error: job finished but no decodable images were found."
-    metadata = [{"url": url, "prompt": prompt, "negative_prompt": negprompt} for url in urls]
+    metadata = [
+        {"url": url, "prompt": prompt, "negative_prompt": negprompt, "width": width, "height": height}
+        for url in urls
+    ]
     return f"[image_meta] {json.dumps(metadata, ensure_ascii=False)}"
 
 
@@ -300,7 +304,7 @@ async def generate_image(
                 status = await _poll_status(client)
                 state = status.get("status")
                 if state == "finished":
-                    return _collect_images(status, prompt, negprompt or None)
+                    return _collect_images(status, prompt, negprompt or None, width, height)
                 if state == "error":
                     return f"Error: generation failed: {status.get('error', 'unknown error')}"
                 if time.monotonic() >= deadline:

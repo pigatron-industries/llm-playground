@@ -298,6 +298,27 @@ async def stop_message(chat_id: str) -> dict:
         return resp.json()
 
 
+async def rerun_image(
+    chat_id: str,
+    prompt: str,
+    negative_prompt: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict:
+    """Regenerate an image with the exact parameters of an existing one —
+    the backend calls the image tool directly, no LLM round-trip. Returns
+    the updated chat. Generation can take a while, hence the long timeout."""
+    payload: dict = {"prompt": prompt, "negative_prompt": negative_prompt or ""}
+    if width is not None:
+        payload["width"] = width
+    if height is not None:
+        payload["height"] = height
+    async with _client(320) as client:
+        resp = await client.post(f"/chats/{chat_id}/rerun-image", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def get_chat_state(chat_id: str) -> dict:
     """Return the current state dict for a chat's workflow (e.g. map, status).
     Returns empty dict for workflows that don't support state output."""
