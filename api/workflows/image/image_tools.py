@@ -177,10 +177,6 @@ def list_image_models(base: str | None = None) -> str:
 class GenerateImageArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: str | None = Field(
-        default=None,
-        description="Model name to use, e.g. 'black-forest-labs/FLUX.1-schnell' (see list_image_models). Omit to use the first available model.",
-    )
     prompt: str = Field(description="What to generate.")
     negprompt: str = Field(default="", description="What to avoid in the image.")
     width: int = Field(default=512, ge=16, description="Image width in pixels.")
@@ -233,47 +229,22 @@ def _collect_images(status: dict, prompt: str, negprompt: str | None) -> str:
 @register_tool(GenerateImageArgs, description="Generate an image via the external image API and report its viewable URL.", category="Image")
 async def generate_image(
     prompt: str,
-    model: str | None = None,
     negprompt: str = "",
     width: int = 512,
     height: int = 512,
     batch: int = 1,
 ) -> str:
     """Start a background generation job and poll it to completion.
-
     Uses the image API's async endpoints (``POST /api/async/generate`` +
     ``GET /api/async``): the start request returns immediately, and we poll the
     shared job slot until it reports a terminal state. The poll loop is ``async``
     (it awaits the sleep and each HTTP call), so the app's event loop — and the
     UI it serves — stays responsive while the image renders.
     """
-    base = _base()
 
-    # Resolve the model: explicit arg > context selection > first in list.
     ctx_model = get_image_model()
-    ctx_base = get_image_base()
-    if model is None:
-        model = ctx_model
 
-    try:
-        models = _list_models(ctx_base if ctx_base else None)
-    except RuntimeError as exc:
-        return f"Error: could not list models: {exc}"
-
-    if model is None:
-        if not models:
-            return "Error: no model specified and the API reported no models."
-        model = models[0]["name"]
-
-    # Resolve the model's base to determine the correct inference parameters.
-    model_base = ctx_base or ""
-    if not model_base:
-        for m in models:
-            if m["name"] == model:
-                model_base = m["base"]
-                break
-
-    params = MODEL_BASE_PARAMS.get(model_base, DEFAULT_GENERATE_PARAMS)
+    params = MODEL_BASE_PARAMS.get(ctx_model, DEFAULT_GENERATE_PARAMS)
     steps = int(params["steps"])
     cfgscale = float(params["cfgscale"])
 
@@ -286,7 +257,7 @@ async def generate_image(
         "height": height,
         "scheduler": "EulerDiscreteScheduler",
         "batch": batch,
-        "models": [{"name": model, "weight": 1.0}],
+        "models": [{"name": ctx_model, "weight": 1.0}],
         "loras": [],
     }
 
@@ -311,9 +282,11 @@ async def generate_image(
         # best-effort: if context unavailable, continue without loras
         pass
 
+    print(payload["loras"])
+
     try:
         async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT) as client:
-            resp = await client.post(f"{base}/api/async/generate", json=payload)
+            resp = await client.post(f"{_base()}/api/async/generate", json=payload)
             if resp.status_code >= 400:
                 return f"Error: image API returned {resp.status_code}: {resp.text[:500]}"
 
@@ -329,4 +302,4 @@ async def generate_image(
                     return "Error: timed out waiting for the image job to finish."
                 await asyncio.sleep(POLL_INTERVAL)
     except httpx.HTTPError as exc:
-        return f"Error: image API unreachable at {base}: {exc}"
+        return f"Error: image API unreachable at {_base()}: {exc}"
