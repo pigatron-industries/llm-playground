@@ -55,6 +55,11 @@ class ImageSettings(BaseModel):
         description="The specific image model to generate with, chosen from the base above.",
         json_schema_extra={"widget": "image_model_select"},
     )
+    selected_loras: list[str] = Field(
+       default_factory=list,
+       description="LoRA names to apply, from the image API's lora list",
+       json_schema_extra={"widget": "lora_select"},
+   )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
