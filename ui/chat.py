@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -173,10 +174,24 @@ def _show_image_overlay(url: str) -> None:
     The image is scaled to fill the viewport (preserving aspect ratio) so it shows
     at full resolution — larger than the bubble it was clicked from. Clicking
     anywhere on the overlay dismisses it."""
-    with ui.dialog() as dialog, ui.card().classes(
-        "bg-transparent border-none p-0 shadow-none cursor-zoom-out"
-    ).style("width:100vw; height:100vh").on("click", lambda: dialog.close()):
-        ui.image(url).style("width:100%; height:100%; object-fit:contain")
+    # Show the image at its natural size (1:1) when possible. Center it
+    # and allow scrolling/panning if the image is larger than the viewport
+    # so it is not cropped. Clicking anywhere dismisses the overlay.
+    # Use a raw <img> with an onload handler that sets the displayed size to
+    # the image's natural pixel dimensions adjusted for devicePixelRatio
+    # (so a 1024px-wide image on a 2x DPR screen will display as 512 CSS px)
+    # and allow scrolling when the image is larger than the viewport.
+    img_id = f"overlay-img-{uuid.uuid4().hex}"
+    img_html = (
+        f"<img id=\"{img_id}\" src=\"{url}\" "
+        "style=\"display:block; height:auto; max-width:none; max-height:none;\" "
+        "onload=\"(function(img){try{const dpr=window.devicePixelRatio||1;const w=img.naturalWidth/ dpr; img.style.width = w + 'px';}catch(e){} })(this)\"/>")
+
+    with ui.dialog() as dialog:
+        wrapper = (
+            f'<div style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center; overflow:auto; background:transparent; cursor:zoom-out" onclick="if(event.target===this) this.closest(\'dialog\').close();">{img_html}</div>'
+        )
+        ui.html(wrapper)
     dialog.open()
 
 
