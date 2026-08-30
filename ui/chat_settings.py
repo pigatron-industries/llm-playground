@@ -209,6 +209,9 @@ def _render_lora_picker(
             ui.notify(f"Could not load LoRAs: {_error_detail(exc)}", type="negative")
             names = []
 
+        # clear previous contents so re-opening doesn't stack duplicate cards
+        dialog.clear()
+
         # make the dialog wider and taller so each entry fits on one line
         with dialog, ui.card().classes("w-[min(96vw,1100px)] h-[72vh] p-5"):
             ui.label(label).classes("text-base font-semibold text-gray-100")
