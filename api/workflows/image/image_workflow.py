@@ -6,6 +6,7 @@ from per-chat settings."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -16,7 +17,6 @@ from ...providers import ChatEvent, get_client
 from ...schemas import Chat, Message
 from ...tools import get_tools
 from ..base import Workflow, WorkflowContext
-from ..common import history_for_model
 from ..registry import register_workflow
 from .image_context import get_image_previous_prompt, set_image_context
 
@@ -25,15 +25,60 @@ TOOL_TYPES = ["Image"]
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "templates" / "system_prompt.md"
 
 
-def _system_prompt(settings: "ImageSettings") -> str:
-    """System prompt from ``templates/system_prompt.md`` with the user's selected
-    image model, recent prompt, and LoRAs appended when set — so the assistant
-    uses them for ``generate_image`` without the user restating them each turn.
+def _last_generation_params(messages: list[Message]) -> dict | None:
+    """Return the parameters (prompt, negative_prompt, width, height) of the
+    most recently generated image, read from the ``[image_meta]`` line the
+    ``generate_image`` tool records in the chat history. Returns ``None`` when
+    no image has been generated in this chat yet.
+
+    A single ``[image_meta]`` line holds one batch (a JSON array); all entries
+    in a batch share the same prompt/negative_prompt/size, so the first entry
+    carries the parameters we care about."""
+    marker = "[image_meta] "
+    for message in reversed(messages):
+        content = message.content or ""
+        index = content.find(marker)
+        if index == -1:
+            continue
+        try:
+            data = json.loads(content[index + len(marker) :].strip())
+        except ValueError:
+            continue
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            entry = data[0]
+            return {
+                "prompt": entry.get("prompt"),
+                "negative_prompt": entry.get("negative_prompt"),
+                "width": entry.get("width"),
+                "height": entry.get("height"),
+            }
+    return None
+
+
+def _system_prompt(settings: "ImageSettings", generation_params: dict | None = None) -> str:
+    """System prompt from ``templates/system_prompt.md`` with the last image's
+    generation parameters, the user's selected image model, and LoRAs appended
+    when set — so the assistant refines the most recent image via
+    ``generate_image`` without the user restating the parameters each turn.
     The settings form renders the base/model pickers for this."""
     prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-    previous_prompt = get_image_previous_prompt()
-    if previous_prompt:
-        prompt += f"\n\nThe previous image prompt was: {previous_prompt}"
+    if generation_params and any(generation_params.values()):
+        lines = [
+            "",
+            "",
+            "**CURRENT GENERATION PARAMETERS**",
+            "The last image you generated used these parameters. Start from them and "
+            "change only what the user asks for.",
+        ]
+        if generation_params.get("prompt"):
+            lines.append(f"Prompt: {generation_params['prompt']}")
+        if generation_params.get("negative_prompt"):
+            lines.append(f"Negative prompt: {generation_params['negative_prompt']}")
+        if generation_params.get("width"):
+            lines.append(f"Width: {generation_params['width']}")
+        if generation_params.get("height"):
+            lines.append(f"Height: {generation_params['height']}")
+        prompt += "\n".join(lines)
     if settings.image_model:
         base_note = f", base `{settings.image_base}`" if settings.image_base else ""
         prompt += (
@@ -96,11 +141,14 @@ class ImageWorkflow(Workflow):
             # Non-fatal: if context helpers not available or settings malformed
             pass
 
+        # Only the current user turn is sent as history; the assistant gets the
+        # last image's parameters (prompt, negative prompt, size) in the system
+        # prompt instead of replaying the whole conversation.
+        generation_params = _last_generation_params(ctx.chat.messages)
         conversation: list[Message] = [
-            Message(role="system", content=_system_prompt(settings))
+            Message(role="system", content=_system_prompt(settings, generation_params)),
+            ctx.user_message,
         ]
-        conversation.extend(history_for_model(ctx.chat.messages))
-        conversation.append(ctx.user_message)
 
         client = get_client()
         async for event in client.chat_stream(
@@ -113,4 +161,4 @@ class ImageWorkflow(Workflow):
 
     def extra_context_chars(self, chat: Chat) -> int:
         settings = ImageSettings.model_validate(chat.workflow_settings)
-        return len(_system_prompt(settings))
+        return len(_system_prompt(settings, _last_generation_params(chat.messages)))
