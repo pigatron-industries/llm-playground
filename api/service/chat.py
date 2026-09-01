@@ -20,6 +20,7 @@ import logging
 from collections.abc import AsyncIterator
 
 from openai import APIConnectionError
+from pydantic import ValidationError
 
 from ..providers import StreamComplete, TextDelta, ReasoningDelta, ToolCallEvent, ToolResultEvent
 from ..schemas import Message, SendMessageRequest
@@ -121,6 +122,12 @@ async def _run_stream(chat_id: str, req: SendMessageRequest, state: StreamState)
         _active_streams.pop(chat_id, None)
         return
 
+    # Snapshot the stored workflow settings so we can detect any in-memory
+    # mutations the workflow made on `ctx.chat` and persist them before we
+    # append messages (otherwise add_message reads from disk and may clobber
+    # unpublished changes).
+    initial_workflow_settings = dict(chat.workflow_settings or {})
+
     workflow = get_workflow(chat.workflow_id)
     user_msg = Message(role="user", content=req.content)
     ctx = WorkflowContext(chat=chat, user_message=user_msg)
@@ -175,10 +182,40 @@ async def _run_stream(chat_id: str, req: SendMessageRequest, state: StreamState)
         failed = True
 
     if not failed:
+        current_settings = dict(ctx.chat.workflow_settings or {})
+        print(current_settings)
+        store.update(chat_id, workflow_settings=current_settings)
+
         store.add_message(chat_id, user_msg)
         for message in produced:
             store.add_message(chat_id, message)
         updated = store.get(chat_id)
+
+        # Normalize & validate workflow settings using the workflow's
+        # settings model (e.g. ImageSettings). This ensures hidden/derived
+        # fields are present and consistent in storage after the turn.
+        try:
+            workflow = get_workflow(updated.workflow_id)
+            try:
+                validated = workflow.settings_model.model_validate(updated.workflow_settings)
+            except ValidationError:
+                # Some old chats may lack the required `model` field; tolerate
+                # that by injecting an empty model and retrying, mirroring
+                # behaviour elsewhere in the codebase.
+                try:
+                    validated = workflow.settings_model.model_validate({**(updated.workflow_settings or {}), "model": ""})
+                except ValidationError:
+                    validated = workflow.settings_model.model_validate({"model": ""})
+            # Persist the normalized dict back to storage. Best-effort: log
+            # failures but don't let them break the chat completion.
+            try:
+                store.update(chat_id, workflow_settings=validated.model_dump())
+            except Exception:
+                log.exception("Failed to persist validated workflow_settings for chat %s", chat_id)
+        except Exception:
+            # If anything goes wrong (missing workflow, validation), continue
+            # without normalization.
+            pass
 
         # If stream was stopped by user, send a "stopped" event instead of "done"
         if stopped:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -31,10 +32,16 @@ from ...config import (
 from ...tools.registry import register_tool
 from .image_context import (
     get_image_base,
+    get_image_chat_id,
     get_image_model,
     get_image_loras,
-    set_image_context,
+    set_image_prompt,
+    set_image_negprompt,
+    set_image_width,
+    set_image_height
 )
+
+log = logging.getLogger("llm_harness.image_tools")
 
 MODELS_TIMEOUT = 15.0
 GENERATE_TIMEOUT = 300.0  # image generation can take a while
@@ -253,7 +260,11 @@ async def generate_image(
 
     ctx_base = get_image_base()
     ctx_model = get_image_model()
-    set_image_context(base=ctx_base, model=ctx_model, previous_prompt=prompt)
+
+    set_image_prompt(prompt)
+    set_image_negprompt(negprompt)
+    set_image_width(width)
+    set_image_height(height)
 
     params = MODEL_BASE_PARAMS.get(ctx_base, DEFAULT_GENERATE_PARAMS)
     steps = int(params["steps"])

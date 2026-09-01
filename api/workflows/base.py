@@ -44,6 +44,20 @@ class Workflow(ABC):
     settings_model: type[BaseModel]
     has_state: bool = False  # Whether this workflow renders a state panel in the UI
 
+    def hidden_settings_fields(self) -> set[str]:
+        """Names of settings the workflow manages itself, marked ``"hidden"`` in
+        its settings schema (e.g. the image workflow's last-generation
+        prompt/size, written by its generate tool). The UI form neither renders
+        nor edits these, and the server preserves their stored values across
+        form updates so a form submission can't clobber them with stale/empty
+        defaults."""
+        schema = self.settings_model.model_json_schema()
+        return {
+            name
+            for name, field in schema.get("properties", {}).items()
+            if field.get("widget") == "hidden"
+        }
+
     @abstractmethod
     def run(self, ctx: WorkflowContext) -> AsyncIterator[ChatEvent]:
         """Yield chat events for this turn; the final event must be a StreamComplete."""

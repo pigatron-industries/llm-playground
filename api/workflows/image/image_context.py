@@ -23,22 +23,46 @@ class ImageContext:
         self._loras: ContextVar[list[dict] | None] = ContextVar(
             "image_context_loras", default=None
         )
-        self._previous_prompt: ContextVar[str | None] = ContextVar(
-            "image_context_previous_prompt", default=None
+        self._prompt: ContextVar[str | None] = ContextVar(
+            "image_context_prompt", default=None
+        )
+        self._negprompt: ContextVar[str | None] = ContextVar(
+            "image_context_negprompt", default=None
+        )
+        self._width: ContextVar[int | None] = ContextVar(
+            "image_context_width", default=None
+        )
+        self._height: ContextVar[int | None] = ContextVar(
+            "image_context_height", default=None
+        )
+        self._chat_id: ContextVar[str | None] = ContextVar(
+            "image_context_chat_id", default=None
         )
 
     def set(
         self,
         base: str | None = None,
         model: str | None = None,
-        previous_prompt: str | None = None,
+        prompt: str | None = None,
+        negprompt: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        chat_id: str | None = None,
     ) -> None:
         if base is not None:
             self._base.set(base)
         if model is not None:
             self._model.set(model)
-        if previous_prompt is not None:
-            self._previous_prompt.set(previous_prompt)
+        if prompt is not None:
+            self._prompt.set(prompt)
+        if negprompt is not None:
+            self._negprompt.set(negprompt)
+        if width is not None:
+            self._width.set(width)
+        if height is not None:
+            self._height.set(height)
+        if chat_id is not None:
+            self._chat_id.set(chat_id)
 
     def set_loras(self, loras: list[dict] | None = None) -> None:
         """Set the selected LoRAs for the current turn.
@@ -48,10 +72,10 @@ class ImageContext:
         if loras is not None:
             self._loras.set(loras)
 
-    def set_previous_prompt(self, previous_prompt: str | None = None) -> None:
-        """Store the most recently used image-generation prompt in the current turn."""
-        if previous_prompt is not None:
-            self._previous_prompt.set(previous_prompt)
+    def set_prompt(self, prompt: str | None = None) -> None:
+        """Store the image-generation prompt for the current turn."""
+        if prompt is not None:
+            self._prompt.set(prompt)
 
     def get_base(self) -> str | None:
         return self._base.get()
@@ -59,14 +83,30 @@ class ImageContext:
     def get_model(self) -> str | None:
         return self._model.get()
 
-    def get_previous_prompt(self) -> str | None:
-        return self._previous_prompt.get()
+    def get_prompt(self) -> str | None:
+        return self._prompt.get()
+
+    def get_negprompt(self) -> str | None:
+        return self._negprompt.get()
+
+    def get_width(self) -> int | None:
+        return self._width.get()
+
+    def get_height(self) -> int | None:
+        return self._height.get()
+
+    def get_chat_id(self) -> str | None:
+        return self._chat_id.get()
 
     def reset(self) -> None:
         self._base.set(None)
         self._model.set(None)
         self._loras.set(None)
-        self._previous_prompt.set(None)
+        self._prompt.set(None)
+        self._negprompt.set(None)
+        self._width.set(None)
+        self._height.set(None)
+        self._chat_id.set(None)
 
 
 image_context = ImageContext()
@@ -75,10 +115,14 @@ image_context = ImageContext()
 def set_image_context(
     base: str | None = None,
     model: str | None = None,
-    previous_prompt: str | None = None,
+    prompt: str | None = None,
+    negprompt: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    chat_id: str | None = None,
 ) -> None:
     """Set the image generation context for the current turn."""
-    image_context.set(base=base, model=model, previous_prompt=previous_prompt)
+    image_context.set(base=base, model=model, prompt=prompt, negprompt=negprompt, width=width, height=height, chat_id=chat_id)
 
 
 def set_image_loras(loras: list[dict] | None = None) -> None:
@@ -86,21 +130,53 @@ def set_image_loras(loras: list[dict] | None = None) -> None:
     image_context.set_loras(loras)
 
 
-def set_image_previous_prompt(previous_prompt: str | None = None) -> None:
-    """Store the most recently used image-generation prompt in context."""
-    image_context.set_previous_prompt(previous_prompt)
+def set_image_prompt(prompt: str | None = None) -> None:
+    """Store the image-generation prompt for the current turn."""
+    image_context.set_prompt(prompt)
+
+
+def set_image_negprompt(negprompt: str | None = None) -> None:
+    """Store the image-generation negative prompt for the current turn."""
+    image_context.set(negprompt=negprompt)
+
+
+def set_image_width(width: int | None = None) -> None:
+    """Store the image-generation width for the current turn."""
+    image_context.set(width=width)
+
+
+def set_image_height(height: int | None = None) -> None:
+    """Store the image-generation height for the current turn."""
+    image_context.set(height=height)
 
 
 def get_image_base() -> str | None:
     return image_context.get_base()
 
 
+def get_image_chat_id() -> str | None:
+    """The id of the chat the current turn belongs to, or None outside a chat."""
+    return image_context.get_chat_id()
+
+
 def get_image_model() -> str | None:
     return image_context.get_model()
 
 
-def get_image_previous_prompt() -> str | None:
-    return image_context.get_previous_prompt()
+def get_image_prompt() -> str | None:
+    return image_context.get_prompt()
+
+
+def get_image_negprompt() -> str | None:
+    return image_context.get_negprompt()
+
+
+def get_image_width() -> int | None:
+    return image_context.get_width()
+
+
+def get_image_height() -> int | None:
+    return image_context.get_height()
 
 
 def get_image_loras() -> list[dict] | None:

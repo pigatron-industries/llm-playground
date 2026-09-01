@@ -204,8 +204,16 @@ def update_chat(chat_id: str, req: UpdateChatRequest) -> Chat:
     settings_input = (
         req.workflow_settings if req.workflow_settings is not None else chat.workflow_settings
     )
+    # Settings the workflow manages itself (marked "hidden" in its schema —
+    # e.g. the image workflow's last-generation params, written by its generate
+    # tool) keep their stored value: the UI form neither shows nor edits them,
+    # so a form update must not clobber them with stale or empty defaults.
+    merged = dict(settings_input)
+    for name in workflow.hidden_settings_fields():
+        if name in chat.workflow_settings:
+            merged[name] = chat.workflow_settings[name]
     try:
-        settings = workflow.settings_model.model_validate(settings_input)
+        settings = workflow.settings_model.model_validate(merged)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
@@ -317,7 +325,11 @@ async def rerun_image(chat_id: str, req: RerunImageRequest) -> Chat:
             settings = ImageSettings.model_validate({**chat.workflow_settings, "model": ""})
         except ValidationError:
             settings = ImageSettings.model_validate({"model": ""})
-    set_image_context(base=settings.image_base, model=settings.image_model or None)
+    # ``chat_id`` lets the tool record this rerun as the chat's new
+    # last-generation params (the Rerun button regenerates an exact prior set).
+    set_image_context(
+        base=settings.image_base, model=settings.image_model or None, chat_id=chat_id
+    )
     set_image_loras(settings.selected_loras or None)
 
     result = await generate_image(

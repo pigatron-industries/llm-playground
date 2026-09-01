@@ -10,15 +10,24 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ...config import DEFAULT_MODEL_BASES
 from ...providers import ChatEvent, get_client
 from ...schemas import Chat, Message
 from ...tools import get_tools
+from ...store import get_store
 from ..base import Workflow, WorkflowContext
 from ..registry import register_workflow
-from .image_context import get_image_previous_prompt, set_image_context
+from .image_context import (
+    set_image_context,
+    set_image_loras,
+    get_image_prompt,
+    get_image_negprompt,
+    get_image_width,
+    get_image_height,
+)
+
 
 TOOL_TYPES = ["Image"]
 
@@ -53,6 +62,17 @@ def _last_generation_params(messages: list[Message]) -> dict | None:
                 "height": entry.get("height"),
             }
     return None
+
+
+def _generation_params(settings: "ImageSettings") -> dict | None:
+    if not getattr(settings, "prompt", None):
+        return None
+    return {
+        "prompt": getattr(settings, "prompt", None),
+        "negative_prompt": getattr(settings, "negprompt", None),
+        "width": getattr(settings, "width", None),
+        "height": getattr(settings, "height", None),
+    }
 
 
 def _system_prompt(settings: "ImageSettings", generation_params: dict | None = None) -> str:
@@ -115,6 +135,14 @@ class ImageSettings(BaseModel):
         json_schema_extra={"widget": "lora_select"},
     )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    # Server-managed: the parameters of the last image this chat generated.
+    # Written by the ``generate_image`` tool after each successful generation so
+    # the next turn can start from them; not shown in the settings form (the
+    # "hidden" widget) and preserved by the server across form updates.
+    prompt: str = Field(default="", json_schema_extra={"widget": "hidden"})
+    negprompt: str = Field(default="", json_schema_extra={"widget": "hidden"})
+    width: int = Field(default=512, ge=16, json_schema_extra={"widget": "hidden"})
+    height: int = Field(default=512, ge=16, json_schema_extra={"widget": "hidden"})
 
 
 @register_workflow
@@ -130,21 +158,20 @@ class ImageWorkflow(Workflow):
         set_image_context(
             base=settings.image_base,
             model=settings.image_model or None,
-            previous_prompt=get_image_previous_prompt(),
+            prompt=settings.prompt or None,
+            negprompt=settings.negprompt or None,
+            width=settings.width or None,
+            height=settings.height or None,
+            chat_id=ctx.chat.id,
         )
-        # Store selected LoRAs for this turn so image tools include them
-        try:
-            from .image_context import set_image_loras
-
-            set_image_loras(settings.selected_loras if settings.selected_loras else None)
-        except Exception:
-            # Non-fatal: if context helpers not available or settings malformed
-            pass
+        set_image_loras(settings.selected_loras if settings.selected_loras else None)
 
         # Only the current user turn is sent as history; the assistant gets the
         # last image's parameters (prompt, negative prompt, size) in the system
-        # prompt instead of replaying the whole conversation.
-        generation_params = _last_generation_params(ctx.chat.messages)
+        # prompt instead of replaying the whole conversation. Prefer the stored
+        # setting (always the last generation); fall back to the last
+        # ``[image_meta]`` line for chats created before the setting existed.
+        generation_params = _generation_params(settings) or _last_generation_params(ctx.chat.messages)
         conversation: list[Message] = [
             Message(role="system", content=_system_prompt(settings, generation_params)),
             ctx.user_message,
@@ -159,6 +186,27 @@ class ImageWorkflow(Workflow):
         ):
             yield event
 
+        # After the streamed run finishes, update the `settings` object with
+        # the per-turn image context so callers holding `settings` see the
+        # new prompt/negprompt/width/height.
+        prompt = get_image_prompt()
+        negprompt = get_image_negprompt()
+        width = get_image_width()
+        height = get_image_height()
+
+        if prompt is not None:
+            settings.prompt = prompt
+        if negprompt is not None:
+            settings.negprompt = negprompt
+        if width is not None:
+            settings.width = width
+        if height is not None:
+            settings.height = height
+
+        ctx.chat.workflow_settings = settings.model_dump()
+
+
     def extra_context_chars(self, chat: Chat) -> int:
         settings = ImageSettings.model_validate(chat.workflow_settings)
-        return len(_system_prompt(settings, _last_generation_params(chat.messages)))
+        generation_params = _generation_params(settings) or _last_generation_params(chat.messages)
+        return len(_system_prompt(settings, generation_params))

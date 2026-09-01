@@ -272,6 +272,12 @@ def _render_settings_form(
     getters: dict[str, Callable[[], Any]] = {}
     handled: set[str] = set()
     for field_name, field_schema in props.items():
+        # Auto-managed fields the workflow writes itself (e.g. the image
+        # workflow's last-generation prompt/size) are not user-editable, so they
+        # render no input. The server preserves their stored values across
+        # form updates (see Workflow.hidden_settings_fields).
+        if field_schema.get("widget") == "hidden":
+            continue
         if field_schema.get("widget") == "image_base_select":
             model_field = next(
                 (
