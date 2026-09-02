@@ -154,6 +154,21 @@ class RerunImageRequest(BaseModel):
     height: int | None = Field(default=None, ge=16)
 
 
+class ApplyImageContextRequest(BaseModel):
+    """Set the image workflow's generation context (prompt, negative prompt,
+    width, height) to the parameters recorded on a previously generated image
+    — the UI's "Context" button on an image bubble. Unlike
+    ``RerunImageRequest`` this does not regenerate; it makes the chat's next
+    turn start from these parameters. ``width``/``height`` are optional so
+    images generated before they were recorded can still be applied (they keep
+    their current values)."""
+
+    prompt: str
+    negative_prompt: str = ""
+    width: int | None = Field(default=None, ge=16)
+    height: int | None = Field(default=None, ge=16)
+
+
 class ContextEstimate(BaseModel):
     """Best-effort size of the extra context (system prompt, injected files,
     ...) a workflow adds beyond the visible chat history — see

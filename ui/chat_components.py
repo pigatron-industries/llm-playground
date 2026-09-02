@@ -133,7 +133,10 @@ def _show_image_overlay(url: str) -> None:
 
 
 def _render_image_bubbles(
-    container, entries: list[dict], on_rerun: Callable[[dict, Any], Any] | None = None
+    container,
+    entries: list[dict],
+    on_rerun: Callable[[dict, Any], Any] | None = None,
+    on_context: Callable[[dict], Any] | None = None,
 ) -> None:
     for entry in entries:
         with container:
@@ -156,6 +159,21 @@ def _render_image_bubbles(
                             )
                             rerun_btn.tooltip(
                                 "Regenerate with the same prompt, size, model and LoRAs"
+                            )
+                        if on_context is not None and entry.get("prompt"):
+                            # Sets the workflow's hidden context settings (prompt,
+                            # negative prompt, size) to this image's parameters so
+                            # the next generation starts from them — no regeneration.
+                            context_btn = ui.button(
+                                "Context",
+                                icon="tune",
+                            ).props("flat dense size=sm").classes("text-gray-300")
+                            context_btn.on(
+                                "click",
+                                lambda e, item=entry: on_context(item),
+                            )
+                            context_btn.tooltip(
+                                "Use this image's prompt, negative prompt and size as the workflow context"
                             )
                         ui.button(
                             "Prompt",

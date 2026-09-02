@@ -319,6 +319,29 @@ async def rerun_image(
         return resp.json()
 
 
+async def apply_image_context(
+    chat_id: str,
+    prompt: str,
+    negative_prompt: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict:
+    """Set the image workflow's generation context (prompt, negative prompt,
+    size) to a previously recorded image's parameters. Returns the updated
+    chat. Unlike ``rerun_image`` this does not regenerate — it just makes the
+    chat's next turn start from these parameters (the workflow's "hidden"
+    settings, set via a dedicated endpoint since the form path preserves them)."""
+    payload: dict = {"prompt": prompt, "negative_prompt": negative_prompt or ""}
+    if width is not None:
+        payload["width"] = width
+    if height is not None:
+        payload["height"] = height
+    async with _client(10) as client:
+        resp = await client.post(f"/chats/{chat_id}/image-context", json=payload)
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def get_chat_state(chat_id: str) -> dict:
     """Return the current state dict for a chat's workflow (e.g. map, status).
     Returns empty dict for workflows that don't support state output."""

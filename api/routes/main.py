@@ -15,6 +15,7 @@ from ..config import get_images_dir
 from ..project_store import get_project_store
 from ..providers import get_client
 from ..schemas import (
+    ApplyImageContextRequest,
     Chat,
     ChatSummary,
     ContextEstimate,
@@ -349,6 +350,47 @@ async def rerun_image(chat_id: str, req: RerunImageRequest) -> Chat:
     if updated is None:
         raise HTTPException(status_code=404, detail="Chat not found")
     return updated
+
+
+@router.post("/chats/{chat_id}/image-context", response_model=Chat)
+def apply_image_context(chat_id: str, req: ApplyImageContextRequest) -> Chat:
+    """Set the image workflow's generation context — prompt, negative prompt,
+    width and height — to the parameters recorded on a previously generated
+    image (the UI's "Context" button on an image bubble). Unlike
+    ``rerun-image`` this does not regenerate; it just makes the chat's next
+    turn start from these parameters.
+
+    These are the workflow's "hidden" settings: the settings-form update path
+    (``PATCH /chats/{id}``) deliberately preserves their stored values so a
+    form submission can't clobber them, so they're set through this dedicated
+    endpoint instead."""
+    store = get_store()
+    chat = store.get(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if chat.workflow_id != "image":
+        raise HTTPException(
+            status_code=400, detail="Context can only be applied in the image workflow."
+        )
+
+    # Load the current settings, tolerating a dict missing the required
+    # ``model`` field (mirrors rerun-image) — we only touch the context fields.
+    try:
+        settings = ImageSettings.model_validate(chat.workflow_settings)
+    except ValidationError:
+        try:
+            settings = ImageSettings.model_validate({**chat.workflow_settings, "model": ""})
+        except ValidationError:
+            settings = ImageSettings.model_validate({"model": ""})
+
+    settings.prompt = req.prompt
+    settings.negprompt = req.negative_prompt
+    if req.width is not None:
+        settings.width = req.width
+    if req.height is not None:
+        settings.height = req.height
+
+    return store.update(chat_id, workflow_settings=settings.model_dump())
 
 
 @router.get("/chats/{chat_id}/stream")

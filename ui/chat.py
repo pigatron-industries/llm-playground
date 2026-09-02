@@ -585,9 +585,16 @@ def register_pages() -> None:
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
                         # Generated images get their own bubble(s), with a
-                        # Prompt button when the result recorded one and a
-                        # Rerun button when it recorded a prompt.
-                        _render_image_bubbles(messages_col, _image_entries(content), on_rerun=rerun_image)
+                        # Prompt button when the result recorded one, a
+                        # Rerun button when it recorded a prompt, and a
+                        # Context button to apply its parameters as the
+                        # workflow context.
+                        _render_image_bubbles(
+                            messages_col,
+                            _image_entries(content),
+                            on_rerun=rerun_image,
+                            on_context=apply_image_context,
+                        )
                         continue
 
                     if msg["role"] == "assistant":
@@ -1051,10 +1058,16 @@ def register_pages() -> None:
                                     extras=["fenced-code-blocks"],
                                 ).classes("text-gray-200 break-words max-w-full")
                 # Generated images get their own bubble(s), with a Prompt
-                # button when the result recorded one and a Rerun button
-                # when it recorded a prompt — mirroring render_history's
-                # treatment of the persisted result.
-                _render_image_bubbles(messages_col, _image_entries(result), on_rerun=rerun_image)
+                # button when the result recorded one, a Rerun button when
+                # it recorded a prompt, and a Context button to apply its
+                # parameters as the workflow context — mirroring
+                # render_history's treatment of the persisted result.
+                _render_image_bubbles(
+                    messages_col,
+                    _image_entries(result),
+                    on_rerun=rerun_image,
+                    on_context=apply_image_context,
+                )
                 # The model still owes a response to this result (more tool
                 # calls, or the final answer) — open a fresh bubble+spinner so
                 # the wait is never silent.
@@ -1123,6 +1136,47 @@ def register_pages() -> None:
                 return
             await set_history(updated["messages"])
             await render_chat_list()
+
+        async def apply_image_context(entry: dict) -> None:
+            """Apply an image bubble's recorded parameters (prompt, negative
+            prompt, size) as this chat's current image-workflow context — the
+            workflow's "hidden" settings, set via a dedicated endpoint since
+            the settings-form path deliberately preserves their stored values.
+            The next generation then starts from this image's parameters
+            instead of the most recent one."""
+            if not state["chat_id"]:
+                ui.notify("Create a chat first.", type="warning")
+                return
+            if not entry.get("prompt"):
+                ui.notify("No prompt recorded on this image to apply.", type="warning")
+                return
+            own_chat_id = state["chat_id"]
+            try:
+                updated = await client.apply_image_context(
+                    own_chat_id,
+                    entry["prompt"],
+                    entry.get("negative_prompt"),
+                    entry.get("width"),
+                    entry.get("height"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                ui.notify(
+                    f"Could not apply image context: {_error_detail(exc)}",
+                    type="negative",
+                    multi_line=True,
+                )
+                return
+            if state["chat_id"] != own_chat_id:
+                # Switched chats mid-request — the settings are persisted for
+                # the right chat server-side; don't touch the current one.
+                return
+            state["workflow_settings"] = updated.get("workflow_settings") or {}
+            await refresh_context_estimate()
+            ui.notify(
+                "Applied this image's prompt, negative prompt and size to the workflow context.",
+                type="positive",
+                multi_line=True,
+            )
 
         async def send() -> None:
             content = (text_input.value or "").strip()
