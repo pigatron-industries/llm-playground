@@ -1341,7 +1341,22 @@ def register_pages() -> None:
 
         send_button.on("click", send)
         stop_button.on("click", stop)
-        text_input.on("keydown.enter", send)
+        # Enter submits; Shift+Enter / Cmd+Enter / Ctrl+Enter insert a newline
+        # (the textarea's default) so multi-line messages can be typed.
+        text_input.on(
+            "keydown",
+            handler=send,
+            js_handler="""
+            (event) => {
+              if (event.key !== 'Enter') return;
+              if (event.shiftKey || event.metaKey || event.ctrlKey) {
+                return;  // let the textarea insert a newline
+              }
+              event.preventDefault();  // block the default newline on plain Enter
+              emit();
+            }
+            """,
+        )
 
         async def initial_load() -> None:
             await render_history()
