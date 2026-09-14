@@ -44,7 +44,7 @@ from .image_context import (
 log = logging.getLogger("llm_harness.image_tools")
 
 MODELS_TIMEOUT = 15.0
-GENERATE_TIMEOUT = 300.0  # image generation can take a while
+GENERATE_TIMEOUT = 900.0  # image generation can take a while
 POLL_INTERVAL = 1.5  # seconds between job-status polls
 
 
