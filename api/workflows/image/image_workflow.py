@@ -31,7 +31,7 @@ from .image_context import (
 
 TOOL_TYPES = ["Image"]
 
-SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "templates" / "system_prompt.md"
+SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent / "templates" / "prompt_image_t2i_plain.md"
 
 
 def _last_generation_params(messages: list[Message]) -> dict | None:
@@ -76,11 +76,6 @@ def _generation_params(settings: "ImageSettings") -> dict | None:
 
 
 def _system_prompt(settings: "ImageSettings", generation_params: dict | None = None) -> str:
-    """System prompt from ``templates/system_prompt.md`` with the last image's
-    generation parameters, the user's selected image model, and LoRAs appended
-    when set — so the assistant refines the most recent image via
-    ``generate_image`` without the user restating the parameters each turn.
-    The settings form renders the base/model pickers for this."""
     prompt = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
     if generation_params and any(generation_params.values()):
         lines = [
