@@ -143,7 +143,7 @@ def get_projects_file() -> Path:
 
 
 def get_images_dir() -> Path:
-    """Directory where generated images are saved.
+    """Directory where generated images are saved (legacy, global).
 
     Override with the ``IMAGES_DIR`` env var (relative paths resolve against
     the working directory). Defaults to ``<project>/data/images``.
@@ -152,3 +152,14 @@ def get_images_dir() -> Path:
     if raw:
         return Path(raw).expanduser()
     return PROJECT_ROOT / "data" / "images"
+
+
+def chat_images_dir(chat_id: str) -> Path:
+    """Directory holding a chat's generated images.
+
+    A folder with the same name as the chat file (``<chat_id>``), living
+    alongside it inside the chats directory — e.g.
+    ``data/chats/chat-20260828-121421-1/`` next to
+    ``data/chats/chat-20260828-121421-1.json``.
+    """
+    return get_chats_dir() / chat_id

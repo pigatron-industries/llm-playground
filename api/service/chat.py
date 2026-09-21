@@ -105,7 +105,9 @@ def start_stream(chat_id: str, req: SendMessageRequest) -> StreamState:
     # The user's message isn't persisted until the turn completes (see
     # _run_stream), so a client reattaching mid-stream has no other way to
     # learn what was actually asked — seed it as the first buffered event.
-    state.events.append(json.dumps({"type": "user_message", "content": req.content}) + "\n")
+    state.events.append(
+        json.dumps({"type": "user_message", "content": req.content, "image": req.image}) + "\n"
+    )
     _active_streams[chat_id] = state
     state.task = asyncio.create_task(_run_stream(chat_id, req, state))
     return state
@@ -129,7 +131,7 @@ async def _run_stream(chat_id: str, req: SendMessageRequest, state: StreamState)
     initial_workflow_settings = dict(chat.workflow_settings or {})
 
     workflow = get_workflow(chat.workflow_id)
-    user_msg = Message(role="user", content=req.content)
+    user_msg = Message(role="user", content=req.content, image=req.image)
     ctx = WorkflowContext(chat=chat, user_message=user_msg)
 
     produced: list[Message] = []

@@ -72,7 +72,16 @@ def message_to_api(message: Message) -> dict[str, Any]:
             for call in message.tool_calls
         ]
         return payload
-    payload["content"] = message.content
+    if message.image:
+        # Multimodal content: text (if any) + image part, the shape every
+        # OpenAI-compatible vision endpoint (OpenAI, LM Studio, Ollama) accepts.
+        parts: list[dict[str, Any]] = []
+        if message.content:
+            parts.append({"type": "text", "text": message.content})
+        parts.append({"type": "image_url", "image_url": {"url": message.image}})
+        payload["content"] = parts
+    else:
+        payload["content"] = message.content
     return payload
 
 

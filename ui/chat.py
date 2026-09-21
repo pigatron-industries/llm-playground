@@ -17,6 +17,7 @@ the full conversation from the backend.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import uuid
 import re
@@ -343,7 +344,11 @@ def register_pages() -> None:
             total = _chars_to_tokens(state.get("extra_context_chars", 0))
             for msg in history:
                 total += _estimate_tokens(msg.get("content", ""))
+                if msg.get("image"):
+                    total += 1000  # rough allowance for one vision image
             total += _estimate_tokens((text_input.value or "").strip())
+            if attached_image["data_url"]:
+                total += 1000  # rough allowance for the pending attachment
             return total
 
         def update_context_usage() -> None:
@@ -619,10 +624,16 @@ def register_pages() -> None:
                         on_delete=on_delete,
                     ):
                         if is_user:
-                            # Keep user input verbatim (no markdown interpretation).
-                            ui.label(body_parts[0][0]).classes(
-                                "text-gray-200 whitespace-pre-wrap break-words"
-                            )
+                            # Attached image (if any), then the text — user
+                            # input stays verbatim (no markdown interpretation).
+                            if msg.get("image"):
+                                ui.image(msg["image"]).classes(
+                                    "max-h-64 max-w-full rounded-lg"
+                                ).props('fit="contain"')
+                            if body_parts[0][0]:
+                                ui.label(body_parts[0][0]).classes(
+                                    "text-gray-200 whitespace-pre-wrap break-words"
+                                )
                         else:
                             # Render assistant replies. Tool reports are verbatim, content is markdown.
                             with ui.column().classes("w-full gap-2"):
@@ -884,9 +895,63 @@ def register_pages() -> None:
         # --- Bottom: input -----------------------------------------------
         # Track whether a stream is currently in progress
         is_streaming = {"value": False}
-        
+
+        # Image currently attached (a data URL), shown as a preview chip above
+        # the input and sent with the next message.
+        attached_image: dict = {"data_url": None, "name": None}
+        attachment_preview = ui.row().classes("w-full max-w-5xl mx-auto")
+        attachment_preview.set_visibility(False)
+
+        def render_attachment_preview() -> None:
+            attachment_preview.clear()
+            if not attached_image["data_url"]:
+                attachment_preview.set_visibility(False)
+                return
+            attachment_preview.set_visibility(True)
+            with attachment_preview:
+                with ui.row().classes("w-fit items-center gap-2 rounded-lg bg-white/10 px-2 py-1.5"):
+                    ui.image(attached_image["data_url"]).classes(
+                        "h-10 w-10 rounded object-cover"
+                    )
+                    ui.label(attached_image["name"] or "Image").classes(
+                        "text-xs text-gray-300"
+                    )
+                    ui.button(
+                        icon="close", on_click=lambda: clear_attachment()
+                    ).props("flat dense round size=xs").tooltip("Remove image")
+
+        def clear_attachment() -> None:
+            attached_image["data_url"] = None
+            attached_image["name"] = None
+            render_attachment_preview()
+
+        # Hide QUploader's file list (files auto-upload immediately and the
+        # chosen image is shown in our own preview chip instead), so the
+        # widget renders as a compact label-only drop zone.
+        ui.add_head_html(
+            "<style>"
+            ".chat-image-uploader .q-uploader__list{display:none}"
+            ".chat-image-uploader .q-uploader__header-content{height:40px;padding:3px}"
+            "</style>"
+        )
+
         with ui.footer().classes("bg-[#2b323b] border-t border-[#585b5f] p-2"):
             with ui.row().classes("w-full max-w-5xl mx-auto items-end gap-2 no-wrap"):
+                # Compact uploader for attaching an image to the next message:
+                # the selected file is uploaded here and turned into a data URL.
+                image_upload = (
+                    ui.upload(
+                        label="Attach image",
+                        auto_upload=True,
+                        max_files=1,
+                        max_file_size=10 * 1024 * 1024,
+                    )
+                    .props("accept='image/*'")
+                    .classes("w-44 shrink-0 chat-image-uploader")
+                    .on_rejected(
+                        lambda _: ui.notify("Image is too large (max 10 MB).", type="warning")
+                    )
+                )
                 text_input = (
                     ui.textarea(placeholder="Type a message…")
                     .classes("flex-grow")
@@ -895,6 +960,21 @@ def register_pages() -> None:
                 send_button = ui.button(icon="send").props("round")
                 stop_button = ui.button(icon="stop").props("round unelevated")
                 stop_button.set_visibility(False)  # Hidden by default
+
+        async def on_image_uploaded(e) -> None:
+            data = await e.file.read()
+            if attached_image["data_url"]:
+                ui.notify("An image is already attached — remove it first.", type="warning")
+            else:
+                attached_image["data_url"] = (
+                    f"data:{e.file.content_type or 'image/png'};base64,"
+                    f"{base64.b64encode(data).decode('ascii')}"
+                )
+                attached_image["name"] = e.file.name
+                render_attachment_preview()
+            image_upload.reset()
+
+        image_upload.on_upload(on_image_uploaded)
         text_input.on("keyup", lambda: update_context_usage())
 
         def make_stream_view(lazy: bool = False) -> dict:
@@ -1180,7 +1260,8 @@ def register_pages() -> None:
 
         async def send() -> None:
             content = (text_input.value or "").strip()
-            if not content:
+            image = attached_image["data_url"]
+            if not content and not image:
                 return
             if not state["chat_id"]:
                 ui.notify("Create a chat first.", type="warning")
@@ -1189,8 +1270,9 @@ def register_pages() -> None:
             own_chat_id = state["chat_id"]
 
             text_input.value = ""
+            clear_attachment()
             # Optimistically show the user's message.
-            history.append({"role": "user", "content": content})
+            history.append({"role": "user", "content": content, "image": image})
             await render_history()
             messages_area.scroll_to(percent=1.0)
             send_button.disable()
@@ -1216,6 +1298,7 @@ def register_pages() -> None:
                     view["on_tool_call"],
                     view["on_tool_result"],
                     view["on_reasoning"],
+                    image=image,
                 )
             )
             active_view["task"] = task
@@ -1271,7 +1354,7 @@ def register_pages() -> None:
             is_streaming["value"] = True
             stop_button.set_visibility(True)
 
-            def on_user_message(question: str) -> None:
+            def on_user_message(question: str, image: str | None = None) -> None:
                 if active_view["token"] is not view["token"]:
                     return
                 # The turn that's still generating hasn't been persisted yet
@@ -1281,9 +1364,11 @@ def register_pages() -> None:
                 # ourselves. Also our first signal that a stream really is
                 # active, so bring up the assistant bubble+spinner now rather
                 # than waiting for the first delta.
-                history.append({"role": "user", "content": question})
+                history.append({"role": "user", "content": question, "image": image})
                 with messages_col:
                     with _message_bubble("You", is_user=True):
+                        if image:
+                            ui.image(image).classes("max-h-64 max-w-full rounded-lg").props('fit="contain"')
                         ui.label(question).classes(
                             "text-gray-200 whitespace-pre-wrap break-words"
                         )

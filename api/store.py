@@ -1,16 +1,20 @@
 """Chat storage.
 
-Chats are persisted as one JSON file per chat (``<chat_id>.json``) in a
-configurable directory (see :func:`api.config.get_chats_dir`). The store is
-behind a small interface so it can be swapped for a DB implementation later
-without touching the routes.
+Chats are persisted as one JSON file per chat in a configurable directory
+(see :func:`api.config.get_chats_dir`). The chat id — and hence the filename —
+is ``chat-YYYYMMDD-HHMMSS-N``, where the date/time is the chat's start moment
+and ``N`` disambiguates chats created in the same second, giving files like
+``chat-20260828-121421-1.json``. A chat's generated images live in a folder
+of the same name alongside that file (``chat-20260828-121421-1/``). The store
+is behind a small interface so it can be swapped for a DB implementation
+later without touching the routes.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import uuid
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +60,21 @@ class ChatStore:
 
     # --- interface ----------------------------------------------------
 
+    def _new_id(self, created_at: datetime) -> str:
+        """Build a human-readable chat id: ``chat-YYYYMMDD-HHMMSS-N``.
+
+        The date/time is the chat's start moment (the value used for
+        ``created_at``); ``N`` is the smallest positive integer not already
+        taken by a chat created in the same second (scans the stored files).
+        """
+        stem = f"chat-{created_at:%Y%m%d-%H%M%S}"
+        next_n = 1
+        for path in self.directory.glob(f"{stem}-*.json"):
+            suffix = path.stem.rsplit("-", 1)[-1]
+            if suffix.isdigit():
+                next_n = max(next_n, int(suffix) + 1)
+        return f"{stem}-{next_n}"
+
     def create(
         self,
         title: str | None = None,
@@ -64,7 +83,7 @@ class ChatStore:
     ) -> Chat:
         now = _now()
         chat = Chat(
-            id=uuid.uuid4().hex,
+            id=self._new_id(now),
             title=title or _DEFAULT_TITLE,
             workflow_id=workflow_id,
             workflow_settings=workflow_settings or {},
@@ -138,10 +157,17 @@ class ChatStore:
 
     def delete(self, chat_id: str) -> bool:
         path = self._path(chat_id)
+        deleted = False
         if path.is_file():
             path.unlink()
-            return True
-        return False
+            deleted = True
+        # Remove the chat's images folder (same name as the chat file,
+        # alongside it) so deleting a chat doesn't leave orphaned images.
+        images = self.directory / chat_id
+        if images.is_dir():
+            shutil.rmtree(images, ignore_errors=True)
+            deleted = True
+        return deleted
 
     def remove_message(self, chat_id: str, index: int) -> Chat:
         """Remove a message at the given index from a chat's history."""

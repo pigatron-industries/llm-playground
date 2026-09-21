@@ -26,6 +26,7 @@ from ...config import (
     DEFAULT_GENERATE_PARAMS,
     DEFAULT_MODEL_BASES,
     MODEL_BASE_PARAMS,
+    chat_images_dir,
     get_image_api_url,
     get_images_dir,
 )
@@ -52,8 +53,11 @@ def _base() -> str:
     return get_image_api_url().rstrip("/")
 
 
-def _save_image(data: bytes, index: int) -> Path:
-    directory = get_images_dir()
+def _save_image(data: bytes, index: int, chat_id: str | None = None) -> Path:
+    # When generated as part of a chat, images live in a folder with the
+    # chat's name alongside its JSON file; otherwise fall back to the legacy
+    # global images directory.
+    directory = chat_images_dir(chat_id) if chat_id else get_images_dir()
     directory.mkdir(parents=True, exist_ok=True)
     stem = f"image-{time.strftime('%Y%m%d-%H%M%S')}-{index:02d}"
     path = directory / f"{stem}.png"
@@ -213,15 +217,20 @@ async def _poll_status(client: httpx.AsyncClient) -> dict:
 def _collect_images(status: dict, prompt: str, negprompt: str | None, width: int, height: int) -> str:
     """Save a finished job's base64 PNG images and report them with metadata.
 
-    The result carries each image's URL (``/api/images/<file>``, served by the
-    app's routes) plus the prompt / negative prompt / size in a single
-    ``[image_meta]`` JSON line. Both go into the model's context and persist
-    with the chat — the UI parses that line to render the image as its own
-    bubble, to show the prompts in a popup, and to rerun the generation with
-    the exact same parameters."""
+    The result carries each image's URL plus the prompt / negative prompt /
+    size in a single ``[image_meta]`` JSON line. Both go into the model's
+    context and persist with the chat — the UI parses that line to render the
+    image as its own bubble, to show the prompts in a popup, and to rerun the
+    generation with the exact same parameters.
+
+    When generated as part of a chat (a chat id is set in the image context),
+    each image is saved into that chat's folder and served at
+    ``/api/chats/<chat_id>/images/<file>``; otherwise it falls back to the
+    legacy ``/api/images/<file>`` location."""
     images = status.get("images", [])
     if not images:
         return "Error: job finished but returned no images."
+    chat_id = get_image_chat_id()
     urls: list[str] = []
     for index, entry in enumerate(images, start=1):
         b64 = entry.get("image", "") if isinstance(entry, dict) else str(entry)
@@ -232,7 +241,11 @@ def _collect_images(status: dict, prompt: str, negprompt: str | None, width: int
         except ValueError as exc:
             return f"Error: could not decode image from job status: {exc}"
         if data:
-            urls.append(f"/api/images/{_save_image(data, index).name}")
+            path = _save_image(data, index, chat_id)
+            if chat_id:
+                urls.append(f"/api/chats/{chat_id}/images/{path.name}")
+            else:
+                urls.append(f"/api/images/{path.name}")
     if not urls:
         return "Error: job finished but no decodable images were found."
     metadata = [

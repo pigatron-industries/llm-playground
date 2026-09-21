@@ -24,6 +24,11 @@ class Message(BaseModel):
     role: Role
     content: str = ""
     reasoning: str = ""
+    # Optional image attached to a user message (a data URL, e.g.
+    # ``data:image/png;base64,...``). Serialised as an OpenAI-style
+    # multimodal ``content`` part (see ``api.providers.message_to_api``);
+    # requires a vision-capable model on the provider side.
+    image: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
@@ -138,6 +143,9 @@ class SendMessageRequest(BaseModel):
     chat's workflow settings now, not per-message."""
 
     content: str
+    # Optional image to send along with the message (data URL, e.g.
+    # ``data:image/png;base64,...``) — needs a vision-capable model.
+    image: str | None = None
 
 
 class RerunImageRequest(BaseModel):

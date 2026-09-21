@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from openai import APIConnectionError, APIStatusError
 from pydantic import ValidationError
 
-from ..config import get_images_dir
+from ..config import chat_images_dir, get_images_dir
 from ..project_store import get_project_store
 from ..providers import get_client
 from ..schemas import (
@@ -111,6 +111,19 @@ def get_generated_image(filename: str) -> FileResponse:
     render the image inline; the file itself lives in the shared images
     directory (see ``get_images_dir``)."""
     directory = get_images_dir().resolve()
+    path = (directory / filename).resolve()
+    if path.parent != directory or not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path)
+
+
+@router.get("/chats/{chat_id}/images/{filename}")
+def get_chat_image(chat_id: str, filename: str) -> FileResponse:
+    """Serve one of a chat's generated images (``/api/chats/<id>/images/<file>``).
+
+    Images generated as part of a chat are stored in a folder with the chat's
+    name, alongside its JSON file (see ``chat_images_dir``)."""
+    directory = chat_images_dir(chat_id).resolve()
     path = (directory / filename).resolve()
     if path.parent != directory or not path.is_file():
         raise HTTPException(status_code=404, detail="Image not found")

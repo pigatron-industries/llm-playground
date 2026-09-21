@@ -77,22 +77,32 @@ def _image_entries(text: str) -> list[dict]:
         if "image_meta" not in line:
             continue
         for item in _parse_image_meta(line) or []:
-            name = item["url"].rsplit("/", 1)[-1]
+            # The URL may be chat-scoped (/api/chats/<id>/images/<file>) or a
+            # legacy global path — keep whatever the backend reported rather
+            # than rebuilding a global one. Only a bare filename (no leading
+            # "/") needs to be normalised onto the legacy endpoint.
+            url = item["url"]
+            if not url.startswith("/"):
+                url = f"/api/images/{url.rsplit('/', 1)[-1]}"
             entries.append(
                 {
-                    "url": f"/api/images/{name}",
+                    "url": url,
                     "prompt": item.get("prompt") or None,
                     "negative_prompt": item.get("negative_prompt") or None,
                     "width": item.get("width") or None,
                     "height": item.get("height") or None,
                 }
             )
+    # Also surface bare image filenames the model may mention in prose. Dedup by
+    # filename (not full URL) so a name already carried by a meta entry —
+    # possibly under a chat-scoped URL — isn't added again as a stale global link.
+    existing_names = {entry["url"].rsplit("/", 1)[-1] for entry in entries}
     for name in _IMAGE_NAME_RE.findall(text or ""):
-        url = f"/api/images/{name}"
-        if url not in {entry["url"] for entry in entries}:
-            entries.append(
-                {"url": url, "prompt": None, "negative_prompt": None, "width": None, "height": None}
-            )
+        if name in existing_names:
+            continue
+        entries.append(
+            {"url": f"/api/images/{name}", "prompt": None, "negative_prompt": None, "width": None, "height": None}
+        )
     return entries
 
 
