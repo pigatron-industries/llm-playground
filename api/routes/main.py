@@ -341,8 +341,13 @@ async def rerun_image(chat_id: str, req: RerunImageRequest) -> Chat:
             settings = ImageSettings.model_validate({"model": ""})
     # ``chat_id`` lets the tool record this rerun as the chat's new
     # last-generation params (the Rerun button regenerates an exact prior set).
+    # No LLM is involved here, so vision review (feeding the image back to a
+    # chat model) is off.
     set_image_context(
-        base=settings.image_base, model=settings.image_model or None, chat_id=chat_id
+        base=settings.image_base,
+        model=settings.image_model or None,
+        chat_id=chat_id,
+        vision_review=False,
     )
     set_image_loras(settings.selected_loras or None)
 

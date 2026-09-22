@@ -197,7 +197,7 @@ async def _consume_ndjson(
     on_tool_call: Callable[[str, dict], None] | None,
     on_tool_result: Callable[[str, str], None] | None,
     on_reasoning: Callable[[str], None] | None,
-    on_user_message: Callable[[str], None] | None = None,
+    on_user_message: Callable[[str, str | None], None] | None = None,
 ) -> dict | None:
     """Drive callbacks from an open NDJSON response, returning the final
     persisted chat once a ``done``/``stopped`` event arrives (or ``None`` if
@@ -217,7 +217,7 @@ async def _consume_ndjson(
         elif kind == "tool_result" and on_tool_result is not None:
             on_tool_result(event["name"], event["result"])
         elif kind == "user_message" and on_user_message is not None:
-            on_user_message(event["content"])
+            on_user_message(event["content"], event.get("image"))
         elif kind == "error":
             raise RuntimeError(event["detail"])
         elif kind in ("done", "stopped"):
@@ -232,16 +232,23 @@ async def stream_message(
     on_tool_call: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
     on_reasoning: Callable[[str], None] | None = None,
+    image: str | None = None,
 ) -> dict:
     """Stream a message reply, calling ``on_delta`` per chunk (and
     ``on_reasoning`` per chunk of the model's reasoning trace, if the
     provider/model emits one — most don't, so it may never fire).
 
+    ``image`` optionally carries an attached image (a data URL, e.g.
+    ``data:image/png;base64,...``) to send alongside the text — needs a
+    vision-capable model.
+
     Generation runs server-side independent of this connection — if it
     drops (e.g. the caller navigates away), the response keeps generating
     and can be picked back up with ``reattach_stream``.
     """
-    payload = {"content": content}
+    payload: dict = {"content": content}
+    if image is not None:
+        payload["image"] = image
     async with _client(600) as client:
         async with client.stream(
             "POST", f"/chats/{chat_id}/messages", json=payload
@@ -263,7 +270,7 @@ async def reattach_stream(
     on_tool_call: Callable[[str, dict], None] | None = None,
     on_tool_result: Callable[[str, str], None] | None = None,
     on_reasoning: Callable[[str], None] | None = None,
-    on_user_message: Callable[[str], None] | None = None,
+    on_user_message: Callable[[str, str | None], None] | None = None,
 ) -> dict | None:
     """Reattach to a message stream already in progress for ``chat_id`` —
     e.g. the UI switched to another chat and back while a response was

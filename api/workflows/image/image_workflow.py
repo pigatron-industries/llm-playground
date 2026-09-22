@@ -129,6 +129,13 @@ class ImageSettings(BaseModel):
         description="LoRAs to apply. Each entry is an object with 'name' and 'weight', e.g. {'name': 'mylora', 'weight': 1.0}",
         json_schema_extra={"widget": "lora_select"},
     )
+    vision_review: bool = Field(
+        default=True,
+        description=(
+            "Show each generated image back to the chat model so it can see and "
+            "critique the result. Requires a vision-capable chat model."
+        ),
+    )
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     # Server-managed: the parameters of the last image this chat generated.
     # Written by the ``generate_image`` tool after each successful generation so
@@ -158,6 +165,7 @@ class ImageWorkflow(Workflow):
             width=settings.width or None,
             height=settings.height or None,
             chat_id=ctx.chat.id,
+            vision_review=settings.vision_review,
         )
         set_image_loras(settings.selected_loras if settings.selected_loras else None)
 

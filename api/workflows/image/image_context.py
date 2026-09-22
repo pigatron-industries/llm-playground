@@ -38,6 +38,9 @@ class ImageContext:
         self._chat_id: ContextVar[str | None] = ContextVar(
             "image_context_chat_id", default=None
         )
+        self._vision_review: ContextVar[bool] = ContextVar(
+            "image_context_vision_review", default=True
+        )
 
     def set(
         self,
@@ -48,6 +51,7 @@ class ImageContext:
         width: int | None = None,
         height: int | None = None,
         chat_id: str | None = None,
+        vision_review: bool | None = None,
     ) -> None:
         if base is not None:
             self._base.set(base)
@@ -63,6 +67,8 @@ class ImageContext:
             self._height.set(height)
         if chat_id is not None:
             self._chat_id.set(chat_id)
+        if vision_review is not None:
+            self._vision_review.set(vision_review)
 
     def set_loras(self, loras: list[dict] | None = None) -> None:
         """Set the selected LoRAs for the current turn.
@@ -98,6 +104,9 @@ class ImageContext:
     def get_chat_id(self) -> str | None:
         return self._chat_id.get()
 
+    def get_vision_review(self) -> bool:
+        return self._vision_review.get()
+
     def reset(self) -> None:
         self._base.set(None)
         self._model.set(None)
@@ -107,6 +116,7 @@ class ImageContext:
         self._width.set(None)
         self._height.set(None)
         self._chat_id.set(None)
+        self._vision_review.set(True)
 
 
 image_context = ImageContext()
@@ -120,9 +130,10 @@ def set_image_context(
     width: int | None = None,
     height: int | None = None,
     chat_id: str | None = None,
+    vision_review: bool | None = None,
 ) -> None:
     """Set the image generation context for the current turn."""
-    image_context.set(base=base, model=model, prompt=prompt, negprompt=negprompt, width=width, height=height, chat_id=chat_id)
+    image_context.set(base=base, model=model, prompt=prompt, negprompt=negprompt, width=width, height=height, chat_id=chat_id, vision_review=vision_review)
 
 
 def set_image_loras(loras: list[dict] | None = None) -> None:
@@ -182,3 +193,8 @@ def get_image_height() -> int | None:
 def get_image_loras() -> list[dict] | None:
     """Return the LoRAs set for the current turn, or None."""
     return image_context._loras.get()
+
+
+def get_image_vision_review() -> bool:
+    """Whether generated images should be fed back to the chat model for review."""
+    return image_context.get_vision_review()

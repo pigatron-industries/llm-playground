@@ -31,11 +31,13 @@ from ...config import (
     get_images_dir,
 )
 from ...tools.registry import register_tool
+from ...tools.vision_review import set_review_images
 from .image_context import (
     get_image_base,
     get_image_chat_id,
     get_image_model,
     get_image_loras,
+    get_image_vision_review,
     set_image_prompt,
     set_image_negprompt,
     set_image_width,
@@ -232,6 +234,7 @@ def _collect_images(status: dict, prompt: str, negprompt: str | None, width: int
         return "Error: job finished but returned no images."
     chat_id = get_image_chat_id()
     urls: list[str] = []
+    data_urls: list[str] = []
     for index, entry in enumerate(images, start=1):
         b64 = entry.get("image", "") if isinstance(entry, dict) else str(entry)
         if not b64:
@@ -246,8 +249,13 @@ def _collect_images(status: dict, prompt: str, negprompt: str | None, width: int
                 urls.append(f"/api/chats/{chat_id}/images/{path.name}")
             else:
                 urls.append(f"/api/images/{path.name}")
+            data_urls.append(f"data:image/png;base64,{b64}")
     if not urls:
         return "Error: job finished but no decodable images were found."
+    # Stash the images for the provider loop: if vision review is enabled it
+    # will show them to the chat model so it can see what it generated.
+    if get_image_vision_review():
+        set_review_images(data_urls)
     metadata = [
         {"url": url, "prompt": prompt, "negative_prompt": negprompt, "width": width, "height": height}
         for url in urls

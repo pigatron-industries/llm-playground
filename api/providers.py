@@ -19,6 +19,10 @@ from openai import AsyncOpenAI
 from .config import ProviderConfig, get_active_provider
 from .schemas import Message, ToolCall
 from .tools import execute_tool
+from .tools.vision_review import pop_review_images
+
+# Cap on how many images a single tool call can feed back to a vision model.
+MAX_REVIEW_IMAGES = 2
 
 
 @dataclass(frozen=True)
@@ -216,6 +220,33 @@ class LLMClient:
                     )
                     produced.append(tool_message)
                     api_messages.append(message_to_api(tool_message))
+
+                    # If the tool produced images, show them to the model in a
+                    # follow-up user message so a vision model can review what
+                    # it generated (tool-role messages can only carry strings).
+                    # Kept out of `produced` so it isn't persisted or replayed
+                    # on later turns.
+                    review_urls = pop_review_images()[:MAX_REVIEW_IMAGES]
+                    if review_urls:
+                        api_messages.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            f"The `{entry['name']}` tool produced the image(s) "
+                                            "below. Review them carefully and base your response "
+                                            "on what you actually see."
+                                        ),
+                                    },
+                                    *[
+                                        {"type": "image_url", "image_url": {"url": url}}
+                                        for url in review_urls
+                                    ],
+                                ],
+                            }
+                        )
                 continue
 
             final_text = "".join(content_parts)
