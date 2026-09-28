@@ -72,6 +72,16 @@ def register_pages() -> None:
         # finishes on its own — generation itself is unaffected, since it
         # keeps running server-side independent of any one subscriber.
         active_view: dict = {"token": None, "task": None}
+        # The nicegui Client behind this page — captured so background
+        # streaming work (send()/reattach_if_streaming() and the on_delta/
+        # on_tool_call/etc. callbacks they drive) can tell when the browser
+        # tab has gone away (closed or refreshed) and stop touching its
+        # now-deleted DOM elements instead of raising RuntimeError.
+        page_client = ui.context.client
+
+        def _page_gone() -> bool:
+            return page_client.is_deleted
+
         state: dict = {
             "chat_id": None,
             "project_id": None,
@@ -559,9 +569,12 @@ def register_pages() -> None:
             except IndexError:
                 pass
             await render_history()
-            messages_area.scroll_to(percent=1.0)
+            if not _page_gone():
+                messages_area.scroll_to(percent=1.0)
 
         async def render_history() -> None:
+            if _page_gone():
+                return
             messages_col.clear()
             with messages_col:
                 if not history:
@@ -682,6 +695,8 @@ def register_pages() -> None:
                                             ).classes("text-[10px] text-gray-500 font-mono")
 
         async def render_chat_list() -> None:
+            if _page_gone():
+                return
             try:
                 chats = await client.list_chats(state["project_id"])
             except Exception:  # noqa: BLE001
@@ -765,6 +780,8 @@ def register_pages() -> None:
                 old_task.cancel()
             history[:] = messages
             await render_history()
+            if _page_gone():
+                return
             update_context_usage()
             messages_area.scroll_to(percent=1.0)
 
@@ -1065,7 +1082,7 @@ def register_pages() -> None:
                 open_assistant_bubble()
 
             def on_delta(chunk: str) -> None:
-                if active_view["token"] is not my_token:
+                if active_view["token"] is not my_token or _page_gone():
                     return
                 ensure_bubble()
                 hide_spinner()
@@ -1074,7 +1091,7 @@ def register_pages() -> None:
                 messages_area.scroll_to(percent=1.0)
 
             def on_reasoning(chunk: str) -> None:
-                if active_view["token"] is not my_token:
+                if active_view["token"] is not my_token or _page_gone():
                     return
                 ensure_bubble()
                 hide_spinner()
@@ -1087,7 +1104,7 @@ def register_pages() -> None:
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_call(name: str, arguments: dict) -> None:
-                if active_view["token"] is not my_token:
+                if active_view["token"] is not my_token or _page_gone():
                     return
                 # The tool call gets its own bubble (mirroring render_history's
                 # separate "Tool" bubble) rather than being inlined into the
@@ -1112,7 +1129,7 @@ def register_pages() -> None:
                 messages_area.scroll_to(percent=1.0)
 
             def on_tool_result(name: str, result: str) -> None:
-                if active_view["token"] is not my_token:
+                if active_view["token"] is not my_token or _page_gone():
                     return
                 if live["tool_spinner"] is not None:
                     live["tool_spinner"].delete()
@@ -1312,6 +1329,12 @@ def register_pages() -> None:
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
 
+            if _page_gone():
+                # The tab was closed or refreshed mid-stream — the response
+                # kept generating server-side and is already persisted; there
+                # is no DOM left here to update.
+                return
+
             if active_view["token"] is not view["token"]:
                 # Superseded by a chat switch (possibly back to this very
                 # chat, which mints its own fresh reattach view — see
@@ -1355,7 +1378,7 @@ def register_pages() -> None:
             stop_button.set_visibility(True)
 
             def on_user_message(question: str, image: str | None = None) -> None:
-                if active_view["token"] is not view["token"]:
+                if active_view["token"] is not view["token"] or _page_gone():
                     return
                 # The turn that's still generating hasn't been persisted yet
                 # (that only happens once it completes), so the question that
@@ -1398,6 +1421,9 @@ def register_pages() -> None:
                 return  # switched away again before this resolved
             except Exception as exc:  # noqa: BLE001
                 error = _error_detail(exc)
+
+            if _page_gone():
+                return  # tab closed/refreshed — nothing left to update here
 
             if active_view["token"] is not view["token"]:
                 return  # switched away again before this resolved
